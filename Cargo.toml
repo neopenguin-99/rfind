@@ -5,3 +5,17 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
+
+
+
+
+
+
+
+
+# todo figure out why I get errors in editor when these are in dev-dependencies instead of dependencies
+tempfile = "3.14.0"
+mockall = "0.13.1"
+ctor = "0.2.9"
+
+[dev-dependencies]
