@@ -1,3 +1,4 @@
+use std::io;
 use std::io::{Write, Read, Seek, SeekFrom};
 use std::fs;
 use std::os::linux::net::SocketAddrExt;
@@ -57,22 +58,61 @@ fn main() {
     search_working_directory(Path::new(starting_path), name);
 }
 
+enum LogLine {
+    Normal(String),
+    Warning(String),
+    Error(String)
+}
 
-fn search_working_directory(working_directory: &Path, name: &str) {
+struct Logger {
+    lines: Vec::<LogLine>,
+    log_immediately: bool
+}
+
+impl Logger {
+    fn new() -> Logger {
+        Logger {
+            lines: Vec::new(),
+            log_immediately: true
+        }
+    }
+}
+
+
+fn search_working_directory(working_directory: &Path, name: &str/*, logger: &mut Logger*/) {
 // fn search_working_directory(working_directory: &str, name: &str) {
     // Check the contents of the current working directory.
     println!("{:#?}", working_directory);
-    let a = fs::read_dir(working_directory).unwrap(); //todo fix unwrap
-    for ele in a.into_iter() {
+
+    let read_dir = match fs::read_dir(working_directory) {
+        Ok(res) => {
+            res
+        }
+        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+            println!("find: Permission denied for dir name {:#?}", working_directory);
+            return;
+        }
+        Err(_) => {
+            println!("An error occurred when attempting to read the '{:#?}' directory", working_directory);
+            return;
+        }
+    };
+
+
+    for ele in read_dir.into_iter() {
         let ele = ele.unwrap();
         let file_name = ele.file_name();
         println!("In loop! file_name: {}", file_name.to_str().unwrap());
         let metadata = ele.metadata();
 
+        
+        println!("still alive!");
         if file_name == name {
             println!("{:#?}/{}", working_directory, name);
+            continue;
         }
-        else if ele.file_type().unwrap().is_dir() {
+        let file_type = ele.file_type().unwrap();
+        if file_type.is_dir() {
 
             // let working_directory: &str = working_directory.to_str().unwrap();
             // let file_name = ele.file_name().to_str().unwrap();
@@ -95,6 +135,7 @@ fn search_working_directory(working_directory: &Path, name: &str) {
 use mockall::{automock, mock, predicate::*};
 use tempfile::Builder;
 use tempfile::TempDir;
+use tempfile::NamedTempFile;
 #[cfg_attr(test, automock)]
 trait MyTrait {
 
@@ -115,6 +156,18 @@ impl SetupInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_file_in_same_directory_3() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
+
+        // Create a file inside of `env::temp_dir()`.
+        let file = NamedTempFile::new()?;
+        let file_name = file.path().file_name().unwrap().to_str().unwrap();
+        search_working_directory(tempfile::env::temp_dir().as_path(), file_name);
+        Ok(())
+    }
 
     #[test]
     fn find_file_in_same_directory_2() -> Result<(), Box<dyn std::error::Error>> {
