@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 use std::env;
-use clap::{Arg, ArgAction, ArgMatches, Command};
+use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
 use std::fs::File;
 
 fn main() {
@@ -26,11 +26,21 @@ fn main() {
         .arg(Arg::new("starting_path")
             .action(ArgAction::Set)
         )
+        .arg(Arg::new("maxdepth")
+            .value_parser(value_parser!(u32))
+            .long("maxdepth")
+            .action(ArgAction::Set)
+            .help("Descend at most the provided number of levels, this value must be a non-negative integer.
+            Using max depth of 0 will apply the expression 
+            for files only in the current directory, and will not search subdirectories")
+        )
         .arg(Arg::new("name")
             .long("name")
             .action(ArgAction::Set)
             .help("Base of file name (the path with the leading directories removed) matches shell pattern")
         ).get_matches();
+
+    // parse the cmd arguments
     if let Some(c) = matches.get_one::<bool>("symlink") {
         println!("Value for -c: {c}");
         // todo implement
@@ -43,6 +53,8 @@ fn main() {
         },
         _ => ()
     }
+
+    let max_depth = matches.get_one::<u32>("maxdepth");
 
     let starting_path: &str = match matches.get_one::<String>("starting_path") {
         Some(x) => x,
@@ -58,7 +70,8 @@ fn main() {
     // println!("Starting_path: {}", starting_path);
     // println!("Name: {}", name);
 
-    search_directory_path(Path::new(starting_path), name, &mut logger);
+    let searcher = Searcher::new(max_depth.copied());
+    searcher.search_directory_path(Path::new(starting_path), name, &mut logger, None);
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -89,60 +102,60 @@ impl Logger for StandardLogger {
     }
 }
 
+struct Searcher {
+    max_depth: Option<u32>
+}
 
-fn search_directory_path<T: Logger>(directory_path: &Path, name: &str, logger: &mut T) {
-// fn search_directory_path(directory_path: &str, name: &str) {
-    // Check the contents of the current working directory.
-
-    // println!("{:#?}", directory_path);
-
-    let read_dir = match fs::read_dir(directory_path) {
-        Ok(res) => {
-            res
-        }
-        Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            println!("find: Permission denied for dir name {:#?}", directory_path);
-            let line = format!("find: Permission denied for directory name {}", directory_path.to_str().unwrap());
-            logger.log(LogLine::StdErr(line));
-            return;
-        }
-        Err(_) => {
-            let line = format!("An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
-            logger.log(LogLine::StdErr(line));
-            return;
-        }
-    };
-
-
-    for ele in read_dir.into_iter() {
-        let ele = ele.unwrap();
-        let file_name = ele.file_name();
-        
-
-        
-        if file_name == name {
-            logger.log(LogLine::StdOut(directory_path.join(name).to_str().unwrap().to_string()));
-            continue;
-        }
-        let file_type = ele.file_type().unwrap();
-        if file_type.is_dir() {
-
-            // let directory_path: &str = directory_path.to_str().unwrap();
-            // let file_name = ele.file_name().to_str().unwrap();
-            
-            // let directory_path = format!("{directory_path}/{file_name}").as_str();
-            // search_directory_path(&Path::new(directory_path), name);
-            
-            let file_name = ele.file_name();
-            let file_name: &str = file_name.to_str().unwrap();
-            let directory_path = directory_path.join(file_name);
-            let directory_path = directory_path.as_path();
-            search_directory_path(directory_path, name, logger);
-
+impl Searcher {
+    pub fn new(max_depth: Option<u32>) -> Searcher {
+        Searcher {
+            max_depth
         }
     }
-    // If nothing found, get all of the directories in this working directory, and then call this function recursively, but pass in different directory each time
+
+    pub fn search_directory_path<T: Logger>(&self, directory_path: &Path, name: &str, logger: &mut T, current_depth: Option<u32>) {
+        let current_depth = current_depth.unwrap_or(0);
+        let read_dir = match fs::read_dir(directory_path) {
+            Ok(res) => {
+                res
+            }
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                println!("find: Permission denied for dir name {:#?}", directory_path);
+                let line = format!("find: Permission denied for directory name {}", directory_path.to_str().unwrap());
+                logger.log(LogLine::StdErr(line));
+                return;
+            }
+            Err(_) => {
+                let line = format!("An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
+                logger.log(LogLine::StdErr(line));
+                return;
+            }
+        };
+
+
+        for ele in read_dir.into_iter() {
+            let ele = ele.unwrap();
+            let file_name = ele.file_name();
+            
+
+            
+            if file_name == name {
+                logger.log(LogLine::StdOut(directory_path.join(name).to_str().unwrap().to_string()));
+                continue;
+            }
+            let file_type = ele.file_type().unwrap();
+            if file_type.is_dir() && (self.max_depth.is_some() && current_depth < self.max_depth.unwrap() || self.max_depth.is_none()) {
+                let file_name = ele.file_name();
+                let file_name: &str = file_name.to_str().unwrap();
+                let directory_path = directory_path.join(file_name);
+                let directory_path = directory_path.as_path();
+                self.search_directory_path(directory_path, name, logger, Some(current_depth + 1));
+            }
+        }
+    }
 }
+
+
 
 #[cfg(test)]
 use mockall::{automock, mock, predicate::*};
@@ -196,7 +209,7 @@ mod tests {
     fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        TestLogger::new();
+        let searcher = Searcher::new(None);
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
@@ -204,7 +217,7 @@ mod tests {
         let mut logger = TestLogger::new();
 
         // Act
-        search_directory_path(tempfile::env::temp_dir().as_path(), file_name, &mut logger);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), file_name, &mut logger, None);
         
         // Assert 
         let a = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new()))); //todo why
@@ -220,7 +233,7 @@ mod tests {
     fn find_file_in_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        TestLogger::new();
+        let searcher = Searcher::new(None);
         
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -230,7 +243,7 @@ mod tests {
         let mut logger = TestLogger::new();
 
         // Act
-        search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -246,21 +259,71 @@ mod tests {
     fn find_file_in_child_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let mut logger = TestLogger::new();
-        
+        let searcher = Searcher::new(None); 
 
         let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
         let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
         let tmp_file = File::create(file_path.clone());
+        let mut logger = TestLogger::new();
         
         // Act
-        search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
         assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
 
+
+        // Teardown
+        drop(tmp_file);
+        temp_dir_child.close()?;
+        directory.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_find_file_in_child_directory_when_max_depth_is_set_to_zero() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
+        let searcher = Searcher::new(Some(0));
+
+        // Create a directory inside of `env::temp_dir()`
+        let directory = TempDir::new()?;
+        let file_path = directory.path().join("find_file_in_child_directory.txt");
+        // Create a file inside of the newly created directory
+        let tmp_file = File::create(file_path.clone())?;
+        let mut logger = TestLogger::new();
+
+        // Act
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger, None);
+
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        assert!(!stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+
+        // Teardown
+        drop(tmp_file);
+        directory.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_find_file_in_child_child_directory_when_max_depth_is_set_to_one() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
+        let searcher = Searcher::new(Some(1));
+
+        let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
+        let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
+        let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
+        let tmp_file = File::create(file_path.clone());
+        let mut logger = TestLogger::new();
+        
+        // Act
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger, None);
+
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        assert!(!stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
 
         // Teardown
         drop(tmp_file);
