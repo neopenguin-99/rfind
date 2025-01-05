@@ -1,15 +1,16 @@
 use std::io;
+use std::mem::{discriminant, Discriminant};
 use std::io::{Write, Read, Seek, SeekFrom};
 use std::fs;
-use std::os::linux::net::SocketAddrExt;
 use std::path::Path;
 use std::process::exit;
-use clap::Parser;
 use std::env;
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use std::fs::File;
 
 fn main() {
+    let mut logger = StandardLogger::new();
+
     let matches: ArgMatches = Command::new("MyApp")
         .arg(Arg::new("symlink")
             .short('P')
@@ -25,7 +26,6 @@ fn main() {
         .arg(Arg::new("starting_path")
             .action(ArgAction::Set)
         )
-            // expressions
         .arg(Arg::new("name")
             .long("name")
             .action(ArgAction::Set)
@@ -33,10 +33,12 @@ fn main() {
         ).get_matches();
     if let Some(c) = matches.get_one::<bool>("symlink") {
         println!("Value for -c: {c}");
+        // todo implement
     }
     match matches.get_one::<bool>("version") {
         Some(c) if *c => {
-            println!("Version: {}", env!("CARGO_PKG_VERSION"));
+            let line = format!("Version: {}", env!("CARGO_PKG_VERSION"));
+            logger.log(LogLine::StdOut(line));
             exit(0);
         },
         _ => ()
@@ -52,12 +54,14 @@ fn main() {
         _ => "*"
     };
 
-    println!("Starting_path: {}", starting_path);
-    println!("Name: {}", name);
+    // todo log as verbose:
+    // println!("Starting_path: {}", starting_path);
+    // println!("Name: {}", name);
 
-    search_working_directory(Path::new(starting_path), name, StandardLogger::new());
+    search_directory_path(Path::new(starting_path), name, &mut logger);
 }
 
+#[derive(Clone, Debug, PartialEq)]
 enum LogLine {
     StdOut(String),
     StdErr(String)
@@ -66,29 +70,6 @@ enum LogLine {
 trait Logger {
     fn log(&mut self, line_to_log: LogLine);
 }
-
-struct TestLogger {
-    log: Vec<LogLine>
-}
-
-impl TestLogger {
-    fn new() -> TestLogger {
-        TestLogger {
-            log: Vec::new()
-        }
-    }
-
-    fn get_logs(&self) -> &Vec<LogLine> {
-        &self.log
-    }
-}
-
-impl Logger for TestLogger {
-    fn log(&mut self, line_to_log: LogLine) {
-        self.log.push(line_to_log);
-    }
-}
-
 
 struct StandardLogger { }
 
@@ -109,22 +90,25 @@ impl Logger for StandardLogger {
 }
 
 
-fn search_working_directory(working_directory: &Path, name: &str, logger: &mut Logger) {
-// fn search_working_directory(working_directory: &str, name: &str) {
+fn search_directory_path<T: Logger>(directory_path: &Path, name: &str, logger: &mut T) {
+// fn search_directory_path(directory_path: &str, name: &str) {
     // Check the contents of the current working directory.
 
-    // println!("{:#?}", working_directory);
+    // println!("{:#?}", directory_path);
 
-    let read_dir = match fs::read_dir(working_directory) {
+    let read_dir = match fs::read_dir(directory_path) {
         Ok(res) => {
             res
         }
         Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-            println!("find: Permission denied for dir name {:#?}", working_directory);
+            println!("find: Permission denied for dir name {:#?}", directory_path);
+            let line = format!("find: Permission denied for directory name {}", directory_path.to_str().unwrap());
+            logger.log(LogLine::StdErr(line));
             return;
         }
         Err(_) => {
-            println!("An error occurred when attempting to read the '{:#?}' directory", working_directory);
+            let line = format!("An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
+            logger.log(LogLine::StdErr(line));
             return;
         }
     };
@@ -133,26 +117,27 @@ fn search_working_directory(working_directory: &Path, name: &str, logger: &mut L
     for ele in read_dir.into_iter() {
         let ele = ele.unwrap();
         let file_name = ele.file_name();
+        
 
         
         if file_name == name {
-            logger.log(format!("{}/{}", working_directory.to_str().unwrap(), name));
+            logger.log(LogLine::StdOut(directory_path.join(name).to_str().unwrap().to_string()));
             continue;
         }
         let file_type = ele.file_type().unwrap();
         if file_type.is_dir() {
 
-            // let working_directory: &str = working_directory.to_str().unwrap();
+            // let directory_path: &str = directory_path.to_str().unwrap();
             // let file_name = ele.file_name().to_str().unwrap();
             
-            // let working_directory = format!("{working_directory}/{file_name}").as_str();
-            // search_working_directory(&Path::new(working_directory), name);
+            // let directory_path = format!("{directory_path}/{file_name}").as_str();
+            // search_directory_path(&Path::new(directory_path), name);
             
             let file_name = ele.file_name();
             let file_name: &str = file_name.to_str().unwrap();
-            let working_directory = working_directory.join(file_name);
-            let working_directory = working_directory.as_path();
-            search_working_directory(working_directory, name, logger);
+            let directory_path = directory_path.join(file_name);
+            let directory_path = directory_path.as_path();
+            search_directory_path(directory_path, name, logger);
 
         }
     }
@@ -164,29 +149,51 @@ use mockall::{automock, mock, predicate::*};
 use tempfile::Builder;
 use tempfile::TempDir;
 use tempfile::NamedTempFile;
-#[cfg_attr(test, automock)]
-trait MyTrait {
 
+
+struct TestLogger {
+    log: Vec<LogLine>
 }
 
-struct SetupInfo {
-    path: String
-}
-
-impl SetupInfo {
-    fn new() -> SetupInfo {
-        SetupInfo {
-            path: tempfile::env::temp_dir().to_str().unwrap().to_string() // todo remove unwrap
+impl TestLogger {
+    fn new() -> TestLogger {
+        TestLogger {
+            log: Vec::new()
         }
     }
+
+    fn get_logs(&self) -> &Vec<LogLine> {
+        &self.log
+    }
+
+    fn is_enum_variant(value: &LogLine, d: Discriminant<LogLine>) -> bool {
+        if discriminant(value) == d {
+            return true;
+        }
+        return false;
+    }
+
+    fn get_logs_by_type(&self, d: Discriminant<LogLine>) -> Vec<LogLine> { //use some
+        //rust wizardry to make this function better (remove the .clone)
+        let log_iter = self.log.clone();
+        log_iter.into_iter().filter(|x| Self::is_enum_variant(x, d)).collect::<Vec<LogLine>>()
+    }
 }
+
+impl Logger for TestLogger {
+    fn log(&mut self, line_to_log: LogLine) {
+        self.log.push(line_to_log);
+    }
+}
+
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn find_file_in_same_directory_3() -> Result<(), Box<dyn std::error::Error>> {
+    fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
         TestLogger::new();
@@ -194,7 +201,18 @@ mod tests {
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
         let file_name = file.path().file_name().unwrap().to_str().unwrap();
-        search_working_directory(tempfile::env::temp_dir().as_path(), file_name, TestLogger::new());
+        let mut logger = TestLogger::new();
+
+        // Act
+        search_directory_path(tempfile::env::temp_dir().as_path(), file_name, &mut logger);
+        
+        // Assert 
+        let a = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new()))); //todo why
+        // do we need to pass in String::new here to get it to compile?????????????
+        assert!(a.contains(&LogLine::StdOut(file.path().to_str().unwrap().to_string())));
+
+        // Teardown
+        drop(file);
         Ok(())
     }
 
@@ -207,11 +225,18 @@ mod tests {
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
         let file_path = directory.path().join("find_file_in_child_directory.txt");
-        let tmp_file = File::create(file_path)?;
+        // Create a file inside of the newly created directory
+        let tmp_file = File::create(file_path.clone())?;
+        let mut logger = TestLogger::new();
 
         // Act
-        search_working_directory(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt");
+        search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger);
 
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+
+        // Teardown
         drop(tmp_file);
         directory.close()?;
         Ok(())        
@@ -221,61 +246,26 @@ mod tests {
     fn find_file_in_child_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        TestLogger::new();
+        let mut logger = TestLogger::new();
+        
 
-        // let directory = TempDir::new()?;
         let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
-        let tmp_file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
-        let tmp_file = File::create(tmp_file_path);
+        let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
+        let tmp_file = File::create(file_path.clone());
         
         // Act
-        search_working_directory(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt");
+        search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger);
 
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+
+
+        // Teardown
         drop(tmp_file);
         temp_dir_child.close()?;
         directory.close()?;
         Ok(())
     }
-
-    #[test]
-    fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
-        // Arrange
-        assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let test_dir = TempDir::new()?;
-        let working_directory = tempfile::env::temp_dir().clone().join(test_dir);
-
-        // let file_name = working_directory.clone();
-        // let file_name = file_name.join("find_file_in_same_directory");
-        // let file_name = file_name.to_str().unwrap();
-        let mut file = File::create(working_directory.clone().join("find_file_in_same_directory"));
-
-        // println!("Working directory: {:#?}", working_directory);
-        // println!("file name: {:#?}", file_name);
-
-        // Act
-        search_working_directory(working_directory.as_path(), "find_file_in_same_directory", TestLogger::new());
-
-
-        println!("{:#?}", tempfile::env::temp_dir());
-        let tmp_dir = TempDir::new()?;
-
-        let mut tmpfile: File = tempfile::tempfile().unwrap();
-        println!("Metadata: {:#?}", tmpfile.metadata());
-        println!("Name: {:#?}", tmpfile);
-        write!(tmpfile, "Hello World!").unwrap();
-        
-        // Seek to start
-        tmpfile.seek(SeekFrom::Start(0)).unwrap();
-
-        // Read
-        let mut buf = String::new();
-        tmpfile.read_to_string(&mut buf).unwrap();
-        assert_eq!("Hello World!", buf);
-
-        drop(file);
-        // test_dir.close();
-        Ok(())
-    }
 }
-
