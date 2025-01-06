@@ -179,12 +179,21 @@ impl Searcher {
             let file_type = ele.file_type().unwrap();
 
             if file_type.is_symlink() && self.symlink_setting == SymLinkSetting::Follow {
+                // navigate to the file pointed to by the symlink
                 let file_referred_to_by_symlink = fs::read_link(ele.path());
                 
-                // navigate to the file pointed to by the symlink
-                // todo add code for broken symlink
-                if file_referred_to_by_symlink.is_ok() {
-                    logger.log(LogLine::StdOut(file_referred_to_by_symlink.unwrap().to_str().unwrap().to_string()))
+                _ = match file_referred_to_by_symlink {
+                    Ok(file_referred_to_by_symlink_unwrapped) => {
+                        logger.log(LogLine::StdOut(file_referred_to_by_symlink_unwrapped.to_str().unwrap().to_string()));
+                        continue;
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                        logger.log(LogLine::StdErr(format!("Broken symlink: {}", ele.path().to_str().unwrap().to_string())));
+                        continue;
+                    }
+                    Err(_) => {
+                        unreachable!("We have handled both cases where read_link would result in an error, so this should be unreachable");
+                    }
                 }
             }
             if file_name == name {
@@ -448,5 +457,46 @@ mod tests {
         // let _ = std::env::set_current_dir(working_directory_before_test)?;
         drop(original_file);
         Ok(())
+    }
+
+    #[test]
+    fn handle_broken_symlink() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        let directory_of_file = TempDir::new()?;
+        let directory_of_link = TempDir::new()?;
+        // let working_directory_before_test = std::env::current_dir().unwrap();
+        assert!(std::env::set_current_dir(directory_of_link.path()).is_ok());
+
+        let original_file_path = directory_of_file.path().join("follows_symlink_when_set_to_follow.txt");
+        let original_file = File::create(original_file_path.clone())?;
+
+        let directory_of_link_path = directory_of_link.path().join("symlink");
+        std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
+
+        //delete the original file to create a broken symlink
+        std::fs::remove_file(original_file_path.clone())?;
+        
+        let mut logger = TestLogger::new();
+        let searcher = Searcher::new(None, SymLinkSetting::Follow);
+        
+        // Act
+        searcher.search_directory_path(directory_of_link.path(), "follows_symlink_when_set_to_follow.txt", &mut logger, None);
+
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+
+        eprintln!("stdout logs {:#?}", stdout_logs);
+        eprintln!("file path {:#?}", original_file_path.to_str().unwrap().to_string());
+        eprintln!("link path {:#?}", directory_of_link_path.to_str().unwrap().to_string());
+        eprintln!("env: {}", std::env::current_dir().unwrap().to_str().unwrap().to_string());
+        assert!(stdout_logs.contains(&LogLine::StdOut(original_file_path.to_str().unwrap().to_string())));
+
+        // Teardown
+        directory_of_file.close()?;
+        directory_of_link.close()?;
+        // let _ = std::env::set_current_dir(working_directory_before_test)?;
+        drop(original_file);
+        Ok(())
+
     }
 }
