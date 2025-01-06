@@ -17,6 +17,7 @@ clap = { version = "4.5.23", features = ["derive"] }
 tempfile = "3.14.0"
 mockall = "0.13.1"
 ctor = "0.2.9"
+speculoos = "0.11.0"
 
 # acceptance tests
 assert_cmd = "2.0.16"

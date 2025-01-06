@@ -5,17 +5,34 @@ use std::fs;
 use std::path::Path;
 use std::process::exit;
 use std::env;
-use clap::{value_parser, Arg, ArgAction, ArgMatches, Command};
+use clap::{value_parser, Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use std::fs::File;
+use speculoos::prelude::*;
 
 fn main() {
     let mut logger = StandardLogger::new();
 
     let matches: ArgMatches = Command::new("MyApp")
-        .arg(Arg::new("symlink")
+        // .arg(Arg::new("debugopts")
+            // .value_parser(value_parser!(SymLinkSetting))
+            // .short('D')
+            // .action(ArgAction::Set)
+            // .help("")
+        // )
+        .arg(Arg::new("symlink_never")
             .short('P')
             .action(ArgAction::SetTrue)
-            .help("Never follow symbolic links.")
+            .help("Never follow symbolic links")
+        )
+        .arg(Arg::new("symlink_follow")
+            .short('L')
+            .action(ArgAction::SetTrue)
+            .help("Follow symbolic links")
+        )
+        .arg(Arg::new("symlink_only_command_line_args")
+            .short('H')
+            .action(ArgAction::SetTrue)
+            .help("Do not follow symbolic links, except when processing command line arguments")
         )
         .arg(Arg::new("version")
             .short('v')
@@ -41,10 +58,20 @@ fn main() {
         ).get_matches();
 
     // parse the cmd arguments
-    if let Some(c) = matches.get_one::<bool>("symlink") {
-        println!("Value for -c: {c}");
-        // todo implement
+    let mut symlink_setting: SymLinkSetting = SymLinkSetting::Never;
+
+    if matches.get_one::<bool>("symlink_only_command_line_args").is_some() {
+        symlink_setting = SymLinkSetting::OnlyCommandLineArgs;
     }
+
+    if matches.get_one::<bool>("symlink_follow").is_some() {
+        symlink_setting = SymLinkSetting::Follow;
+    }
+
+    if matches.get_one::<bool>("symlink_never").is_some() {
+        symlink_setting = SymLinkSetting::Never;
+    }
+
     match matches.get_one::<bool>("version") {
         Some(c) if *c => {
             let line = format!("Version: {}", env!("CARGO_PKG_VERSION"));
@@ -70,9 +97,22 @@ fn main() {
     // println!("Starting_path: {}", starting_path);
     // println!("Name: {}", name);
 
-    let searcher = Searcher::new(max_depth.copied());
+    let searcher = Searcher::new(max_depth.copied(), symlink_setting);
     searcher.search_directory_path(Path::new(starting_path), name, &mut logger, None);
 }
+
+#[derive(Debug, Clone, PartialEq)]
+enum SymLinkSetting {
+    Never,
+    Follow,
+    OnlyCommandLineArgs
+}
+
+// impl ValueEnum for SymLinkSetting {
+    // fn value_variants<'a>() -> &'a [Self] {
+    // }
+// }
+
 
 #[derive(Clone, Debug, PartialEq)]
 enum LogLine {
@@ -103,13 +143,15 @@ impl Logger for StandardLogger {
 }
 
 struct Searcher {
-    max_depth: Option<u32>
+    max_depth: Option<u32>,
+    symlink_setting: SymLinkSetting
 }
 
 impl Searcher {
-    pub fn new(max_depth: Option<u32>) -> Searcher {
+    pub fn new(max_depth: Option<u32>, symlink_setting: SymLinkSetting) -> Searcher {
         Searcher {
-            max_depth
+            max_depth,
+            symlink_setting
         }
     }
 
@@ -131,19 +173,24 @@ impl Searcher {
                 return;
             }
         };
-
-
         for ele in read_dir.into_iter() {
             let ele = ele.unwrap();
             let file_name = ele.file_name();
-            
+            let file_type = ele.file_type().unwrap();
 
-            
+            if file_type.is_symlink() && self.symlink_setting == SymLinkSetting::Follow {
+                let file_referred_to_by_symlink = fs::read_link(ele.path());
+                
+                // navigate to the file pointed to by the symlink
+                // todo add code for broken symlink
+                if file_referred_to_by_symlink.is_ok() {
+                    logger.log(LogLine::StdOut(file_referred_to_by_symlink.unwrap().to_str().unwrap().to_string()))
+                }
+            }
             if file_name == name {
                 logger.log(LogLine::StdOut(directory_path.join(name).to_str().unwrap().to_string()));
                 continue;
             }
-            let file_type = ele.file_type().unwrap();
             if file_type.is_dir() && (self.max_depth.is_some() && current_depth < self.max_depth.unwrap() || self.max_depth.is_none()) {
                 let file_name = ele.file_name();
                 let file_name: &str = file_name.to_str().unwrap();
@@ -209,7 +256,7 @@ mod tests {
     fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let searcher = Searcher::new(None);
+        let searcher = Searcher::new(None, SymLinkSetting::Never);
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
@@ -233,11 +280,12 @@ mod tests {
     fn find_file_in_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let searcher = Searcher::new(None);
+        let searcher = Searcher::new(None, SymLinkSetting::Never);
         
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
         let file_path = directory.path().join("find_file_in_child_directory.txt");
+        
         // Create a file inside of the newly created directory
         let tmp_file = File::create(file_path.clone())?;
         let mut logger = TestLogger::new();
@@ -247,7 +295,8 @@ mod tests {
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+        assert_that(stdout_logs.first().unwrap()).is_equal_to(&LogLine::StdOut(file_path.to_str().unwrap().to_string()));
+        //assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
 
         // Teardown
         drop(tmp_file);
@@ -259,7 +308,7 @@ mod tests {
     fn find_file_in_child_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let searcher = Searcher::new(None); 
+        let searcher = Searcher::new(None, SymLinkSetting::Never); 
 
         let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
@@ -285,7 +334,7 @@ mod tests {
     #[test]
     fn does_not_find_file_in_child_directory_when_max_depth_is_set_to_zero() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let searcher = Searcher::new(Some(0));
+        let searcher = Searcher::new(Some(0), SymLinkSetting::Never);
 
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -310,7 +359,7 @@ mod tests {
     #[test]
     fn does_not_find_file_in_child_child_directory_when_max_depth_is_set_to_one() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
-        let searcher = Searcher::new(Some(1));
+        let searcher = Searcher::new(Some(1), SymLinkSetting::Never);
 
         let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
@@ -329,6 +378,75 @@ mod tests {
         drop(tmp_file);
         temp_dir_child.close()?;
         directory.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_follow_symbolic_links_by_default() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        let current_directory = TempDir::new()?;
+        let directory_of_link = TempDir::new()?;
+        let working_directory_before_test = std::env::current_dir().unwrap();
+        assert!(std::env::set_current_dir(current_directory.path()).is_ok());
+
+        let original_file_path = current_directory.path().join("does_not_follow_symbolic_links_by_default.txt");
+        let original_file = File::create(original_file_path.clone())?;
+
+        let directory_of_link_path = directory_of_link.path().join("symlink");
+        std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
+        
+        let mut logger = TestLogger::new();
+        let searcher = Searcher::new(None, SymLinkSetting::Never);
+        
+        // Act
+        searcher.search_directory_path(current_directory.path(), "does_not_follow_symbolic_links_by_default.txt", &mut logger, None);
+
+        // Assert
+         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+         assert!(!stdout_logs.contains(&LogLine::StdOut(directory_of_link_path.to_str().unwrap().to_string())));
+
+        // Teardown
+        current_directory.close()?;
+        directory_of_link.close()?;
+        let _ = std::env::set_current_dir(working_directory_before_test)?;
+        drop(original_file);
+        Ok(())
+    }
+
+    #[test]
+    fn follows_symlink_when_set_to_follow() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        let directory_of_file = TempDir::new()?;
+        let directory_of_link = TempDir::new()?;
+        // let working_directory_before_test = std::env::current_dir().unwrap();
+        assert!(std::env::set_current_dir(directory_of_link.path()).is_ok());
+
+        let original_file_path = directory_of_file.path().join("follows_symlink_when_set_to_follow.txt");
+        let original_file = File::create(original_file_path.clone())?;
+
+        let directory_of_link_path = directory_of_link.path().join("symlink");
+        std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
+        
+        let mut logger = TestLogger::new();
+        let searcher = Searcher::new(None, SymLinkSetting::Follow);
+        
+        // Act
+        searcher.search_directory_path(directory_of_link.path(), "follows_symlink_when_set_to_follow.txt", &mut logger, None);
+
+        // Assert
+        let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+
+        eprintln!("stdout logs {:#?}", stdout_logs);
+        eprintln!("file path {:#?}", original_file_path.to_str().unwrap().to_string());
+        eprintln!("link path {:#?}", directory_of_link_path.to_str().unwrap().to_string());
+        eprintln!("env: {}", std::env::current_dir().unwrap().to_str().unwrap().to_string());
+        assert!(stdout_logs.contains(&LogLine::StdOut(original_file_path.to_str().unwrap().to_string())));
+
+        // Teardown
+        directory_of_file.close()?;
+        directory_of_link.close()?;
+        // let _ = std::env::set_current_dir(working_directory_before_test)?;
+        drop(original_file);
         Ok(())
     }
 }
