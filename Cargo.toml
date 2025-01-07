@@ -5,13 +5,7 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.23", features = ["derive"] }
-
-
-
-
-
-
-
+peg = "0.8.4"
 
 # todo figure out why I get errors in editor when these are in dev-dependencies instead of dependencies
 tempfile = "3.14.0"
