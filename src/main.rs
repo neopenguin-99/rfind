@@ -13,6 +13,7 @@ use speculoos::prelude::*;
 
 peg::parser! {
     grammar expression_parser for str {
+        rule 
 
     }
 }
@@ -70,7 +71,11 @@ fn main() {
             .long("type")
             .action(ArgAction::Set)
             .help("file name, provided as a character. Use multiple characters to signify multiple types")
-        ).get_matches();
+        )
+            // todo grab expression from here:
+        .arg(Arg::new())
+            
+        ) .try_get_matches();
 
     // parse the cmd arguments
     let mut symlink_setting: SymLinkSetting = SymLinkSetting::Never;
@@ -120,9 +125,25 @@ fn main() {
     // todo log as verbose:
     // println!("Starting_path: {}", starting_path);
     // println!("Name: {}", name);
+    
+    // Somewhere here, we need to grab all parts of the expression
+    let val = matches.get_raw("arg");
+    println!("{:#?}", val);
 
     let searcher = Searcher::new(max_depth.copied(), symlink_setting);
     searcher.search_directory_path(Path::new(starting_path), types, &mut logger, None);
+}
+
+struct Expression {
+    expression_str: Vec<String>,
+    sub_expression: Box<dyn Option<Vec<Expression>>>
+}
+
+fn extract_tokens_into_expression(tokens: Vec<String>) -> Expression {
+    for token in tokens {
+        
+
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
