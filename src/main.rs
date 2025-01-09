@@ -71,10 +71,6 @@ fn main() {
             .long("type")
             .action(ArgAction::Set)
             .help("file name, provided as a character. Use multiple characters to signify multiple types")
-        )
-            // todo grab expression from here:
-        .arg(Arg::new())
-            
         ) .try_get_matches();
 
     // parse the cmd arguments
@@ -135,14 +131,102 @@ fn main() {
 }
 
 struct Expression {
-    expression_str: Vec<String>,
-    sub_expression: Box<dyn Option<Vec<Expression>>>
+    expression_str: Option<Box<Vec<String>>>,
+    sub_expression: Option<Box<Vec<Expression>>>
 }
 
-fn extract_tokens_into_expression(tokens: Vec<String>) -> Expression {
-    for token in tokens {
-        
+enum OperatorType {
+    And,
+    Or,
+    Not
+}
 
+enum OperatorOrBool {
+    Operator(OperatorType),
+    Bool(bool)
+}
+
+struct Resolver {
+    expression: Vec<OperatorOrBool>
+}
+
+
+fn split_into_string_vec(input: String) -> Vec<String> {
+    input.split_whitespace()
+
+}
+
+fn some_test_returns_true() -> bool {
+    true
+}
+
+fn some_test_returns_false() -> bool {
+    false
+}
+
+fn extract_tokens_into_expression(tokens: Vec<String>, expecting_operator: bool) -> Expression {
+    let mut iter = tokens.iter().rev();
+    let closing_bracket_index: i32;
+
+    let mut ex = Expression {
+        expression_str: Some(Box::new(tokens.clone())),
+        sub_expression: None
+    };
+
+    for (i, el) in iter.enumerate() {
+        if el == ")" {
+            panic!(") should not be here!");
+        }
+        if el == "(" {
+            let iter2 = tokens[i+1..].iter();
+            for (i2, el2) in iter2.enumerate() {
+                if el2 == ")" {
+                    extract_tokens_into_expression(tokens[i+1..i2-1].to_vec(), expecting_operator);
+                }
+            }            
+            panic!("Could not find enclosing )");
+            // ex.sub_expression = match ex.sub_expression {
+                // Some(_) => extract_tokens_into_expression(tokens[i+1..], expecting_operator),
+                // None => Some(Box::new(Vec::new() [extract_tokens_into_expression(tokens[i+1..], expecting_operator)]))
+            // };
+
+        }
+        // tests logic
+        if el == "--name" {
+            let test_value: String = tokens[i+1].clone();
+            // ex.expression_str = Some([*el, name.unwrap_or_else(|| panic!("--name expected a name of a file to find, but no file was provided"))]);
+            
+            ex.expression_str = Some(Box::new(vec![el.to_string(), test_value]));
+            return ex;
+        }
+        if el == "--type" {
+            let r#type = tokens[i+1].clone();
+            
+            ex.expression_str = Some(Box::new(vec![el.to_string(), r#type]));
+            return ex;
+        }
+
+        if el == "--or" || el == "--and" || el == "--not" {
+            match ex.sub_expression {
+                Some(_) => extract_tokens_into_expression(tokens[i+1..].to_vec(), expecting_operator),
+                None => panic!("expected expression on right hand side of {}", el)
+            };
+        }
+    }
+
+    return Expression {
+        expression_str: None,
+        sub_expression: None
+    };
+}
+
+// calls itself recursively until it finds leaf nodes, i.e where sub_expression: None
+fn eval(expr: Expression) -> bool {
+    match expr.sub_expression {
+        Some(sub_expression) => eval(sub_expression),
+        None => {
+
+        }
     }
 }
 
