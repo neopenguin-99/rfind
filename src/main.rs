@@ -11,13 +11,6 @@ use clap::{value_parser, Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use std::fs::File;
 use speculoos::prelude::*;
 
-peg::parser! {
-    grammar expression_parser for str {
-        rule 
-
-    }
-}
-
 fn main() {
     let mut logger = StandardLogger::new();
 
@@ -49,9 +42,6 @@ fn main() {
             .action(ArgAction::SetTrue)
             .help("Gets the current version of rfind")
         )
-        .arg(Arg::new("starting_path")
-            .action(ArgAction::Set)
-        )
         .arg(Arg::new("maxdepth")
             .value_parser(value_parser!(u32))
             .long("maxdepth")
@@ -59,6 +49,12 @@ fn main() {
             .help("Descend at most the provided number of levels, this value must be a non-negative integer.
             Using max depth of 0 will apply the expression 
             for files only in the current directory, and will not search subdirectories")
+        )
+        .arg(Arg::new("starting_path")
+            .action(ArgAction::Set)
+        )
+        .arg(Arg::new("expression")
+            .action(ArgAction::Set)
         )
         //expression
         .arg(Arg::new("name")
@@ -71,7 +67,7 @@ fn main() {
             .long("type")
             .action(ArgAction::Set)
             .help("file name, provided as a character. Use multiple characters to signify multiple types")
-        ) .try_get_matches();
+        ).try_get_matches().unwrap();
 
     // parse the cmd arguments
     let mut symlink_setting: SymLinkSetting = SymLinkSetting::Never;
@@ -102,6 +98,12 @@ fn main() {
     let starting_path: &str = match matches.get_one::<String>("starting_path") {
         Some(x) => x,
         _ => "."
+    };
+
+    let r = matches.get_many::<String>("expression").unwrap().collect();
+    let expression = match matches.get_many::<String>("expression") {
+        Some(x) => x.collect(),
+        _ => vec!["--true"]
     };
 
     let types: Vec<Test> = Vec::new();
@@ -152,28 +154,28 @@ struct Resolver {
 
 
 fn split_into_string_vec(input: String) -> Vec<String> {
-    input.split_whitespace()
-
+    input.split_whitespace().map(|x| x.to_owned()).collect()
 }
 
-fn some_test_returns_true() -> bool {
+fn some_test_returns_true(input: Vec<String>) -> bool {
+    _ = input;
     true
 }
 
-fn some_test_returns_false() -> bool {
+fn some_test_returns_false(input: Vec<String>) -> bool {
+    _ = input;
     false
 }
 
-fn extract_tokens_into_expression(tokens: Vec<String>, expecting_operator: bool) -> Expression {
-    let mut iter = tokens.iter().rev();
-    let closing_bracket_index: i32;
+fn extract_tokens_into_expression(tokens: Vec<String>) -> bool {
+    let iter = tokens.iter().rev();
 
     let mut ex = Expression {
         expression_str: Some(Box::new(tokens.clone())),
         sub_expression: None
     };
 
-    for (i, el) in iter.enumerate() {
+    for (i, el) in iter.clone().enumerate() {
         if el == ")" {
             panic!(") should not be here!");
         }
@@ -181,7 +183,7 @@ fn extract_tokens_into_expression(tokens: Vec<String>, expecting_operator: bool)
             let iter2 = tokens[i+1..].iter();
             for (i2, el2) in iter2.enumerate() {
                 if el2 == ")" {
-                    extract_tokens_into_expression(tokens[i+1..i2-1].to_vec(), expecting_operator);
+                    return extract_tokens_into_expression(tokens[i+1..i2-1].to_vec());
                 }
             }            
             panic!("Could not find enclosing )");
@@ -191,43 +193,44 @@ fn extract_tokens_into_expression(tokens: Vec<String>, expecting_operator: bool)
             // };
 
         }
+    }
+
+    let mut expression_result: bool = false;
+    for (i, el) in iter.enumerate() {
+        if el == "--or" {
+            if expression_result {
+                return true;
+            } else {
+                return expression_result || extract_tokens_into_expression(tokens[i+1..].to_vec());
+            }
+            // expression_result = extract_tokens_into_expression(tokens[i-2..i].to_vec(), expecting_operator) || extract_tokens_into_expression(tokens[i+1..i+3].to_vec(), expecting_operator);
+        }
+        if el == "--and" {
+            if !expression_result {
+                return false;
+            } else {
+                return expression_result && extract_tokens_into_expression(tokens[i+1..].to_vec());
+            }
+        }
+        if el == "--not" {
+            return !extract_tokens_into_expression(tokens[i+1..].to_vec());
+        }
         // tests logic
-        if el == "--name" {
-            let test_value: String = tokens[i+1].clone();
+        if el == "--name" { // todo maybe make one if statement for all tests?
+            let name: String = tokens[i+1].clone();
             // ex.expression_str = Some([*el, name.unwrap_or_else(|| panic!("--name expected a name of a file to find, but no file was provided"))]);
             
-            ex.expression_str = Some(Box::new(vec![el.to_string(), test_value]));
-            return ex;
+            ex.expression_str = Some(Box::new(vec![el.to_string(), name]));
+            expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         if el == "--type" {
             let r#type = tokens[i+1].clone();
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), r#type]));
-            return ex;
-        }
-
-        if el == "--or" || el == "--and" || el == "--not" {
-            match ex.sub_expression {
-                Some(_) => extract_tokens_into_expression(tokens[i+1..].to_vec(), expecting_operator),
-                None => panic!("expected expression on right hand side of {}", el)
-            };
+            expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
     }
-
-    return Expression {
-        expression_str: None,
-        sub_expression: None
-    };
-}
-
-// calls itself recursively until it finds leaf nodes, i.e where sub_expression: None
-fn eval(expr: Expression) -> bool {
-    match expr.sub_expression {
-        Some(sub_expression) => eval(sub_expression),
-        None => {
-
-        }
-    }
+    expression_result
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -413,11 +416,11 @@ mod tests {
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
-        let file_name = file.path().file_name().unwrap().to_str().unwrap();
         let mut logger = TestLogger::new();
+        let test_by_name = Test::Name(file.path().file_name().unwrap().to_str().unwrap().to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), file_name, &mut logger, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, &mut logger, None);
         
         // Assert 
         let a = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new()))); //todo why
@@ -442,9 +445,10 @@ mod tests {
         // Create a file inside of the newly created directory
         let tmp_file = File::create(file_path.clone())?;
         let mut logger = TestLogger::new();
+        let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -468,9 +472,10 @@ mod tests {
         let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
         let tmp_file = File::create(file_path.clone());
         let mut logger = TestLogger::new();
+        let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -495,9 +500,10 @@ mod tests {
         // Create a file inside of the newly created directory
         let tmp_file = File::create(file_path.clone())?;
         let mut logger = TestLogger::new();
+        let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_directory.txt", &mut logger, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -519,9 +525,10 @@ mod tests {
         let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
         let tmp_file = File::create(file_path.clone());
         let mut logger = TestLogger::new();
+        let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), "find_file_in_child_child_directory.txt", &mut logger, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -550,9 +557,10 @@ mod tests {
         
         let mut logger = TestLogger::new();
         let searcher = Searcher::new(None, SymLinkSetting::Never);
+        let test_by_name = Test::Name("does_not_follow_symbolic_links_by_default.txt".to_string());
         
         // Act
-        searcher.search_directory_path(current_directory.path(), "does_not_follow_symbolic_links_by_default.txt", &mut logger, None);
+        searcher.search_directory_path(current_directory.path(), &test_by_name, &mut logger, None);
 
         // Assert
          let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -582,9 +590,10 @@ mod tests {
         
         let mut logger = TestLogger::new();
         let searcher = Searcher::new(None, SymLinkSetting::Follow);
+        let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), "follows_symlink_when_set_to_follow.txt", &mut logger, None);
+        searcher.search_directory_path(directory_of_link.path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -622,9 +631,10 @@ mod tests {
         
         let mut logger = TestLogger::new();
         let searcher = Searcher::new(None, SymLinkSetting::Follow);
+        let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), "follows_symlink_when_set_to_follow.txt", &mut logger, None);
+        searcher.search_directory_path(directory_of_link.path(), &test_by_name, &mut logger, None);
 
         // Assert
         let stdout_logs = logger.get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
