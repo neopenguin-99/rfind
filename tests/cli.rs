@@ -13,11 +13,16 @@ fn cli_find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
     assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
 
     let file = NamedTempFile::new()?;
-    let file_path = file.path().file_name().unwrap().to_str().unwrap();
+    let file_path = file.path().to_str().unwrap().to_string();
+    let file_name = file.path().file_name().unwrap().to_str().unwrap();
     
     // Act
     let mut cmd = Command::cargo_bin("rfind")?;
-    cmd.arg("--name").arg(file_path);
+    cmd.arg("--name").arg(file_name);
+
+    println!("file name: {}", file_name);
+    println!("file path: {}", file_path);
+    println!("{:#?}", cmd);
 
     // Assert
     cmd.assert().success().stdout(predicate::str::contains(file_path));
