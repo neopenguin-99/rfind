@@ -11,20 +11,15 @@ use clap::{arg, crate_authors, crate_version, value_parser, Arg, ArgAction, ArgM
 use std::sync::Mutex;
 use std::fs::File;
 use speculoos::prelude::*;
+use test_case::test_case;
 
 fn main() {
-    let mut logger = StandardLogger::new();
+    let logger = StandardLogger::new();
 
 
     let mut matches: ArgMatches = Command::new("MyApp")
         .version(crate_version!())
         .author(crate_authors!("\n"))
-        // .arg(Arg::new("debugopts")
-            // .value_parser(value_parser!(SymLinkSetting))
-            // .short('D')
-            // .action(ArgAction::Set)
-            // .help("")
-        // )
         .arg(Arg::new("symlink_never")
             .short('P')
             .action(ArgAction::SetTrue)
@@ -68,27 +63,10 @@ fn main() {
         )
         .allow_missing_positional(true)
         .arg(Arg::new("starting_path").default_value("."))
-        .dont_delimit_trailing_values(true)
-        .arg(Arg::new("expression").default_value("-- --true"))
-        // .arg(arg!(<cmd> ... "expression").default_value(".").action(ArgAction::Set))
-
-        // .arg(Arg::new("something").multiple(true))
-        //expression
-        // .arg(Arg::new("name")
-            // .long("name")
-            // .action(ArgAction::Set)
-            // .help("Base of file name (the path with the leading directories removed) matches shell pattern")
-        // )
-        // .arg(Arg::new("type")
-            // .value_parser(value_parser!(String))
-            // .long("type")
-            // .action(ArgAction::Set)
-            // .help("file name, provided as a character. Use multiple characters to signify multiple types")
+        .arg(Arg::new("expression").default_value("--true").num_args(0..).value_parser(value_parser!(String)))
         .try_get_matches().unwrap();
 
     // parse the cmd arguments
-
-
     let mut symlink_setting: SymLinkSetting = SymLinkSetting::Never;
 
     if matches.remove_one::<bool>("symlink_only_command_line_args").is_some() {
@@ -126,8 +104,6 @@ fn main() {
     let max_depth = matches.remove_one::<u32>("max_depth");
 
     let starting_path = matches.remove_one::<String>("starting_path");
-    eprintln!("starting_path: {:#?}", starting_path);
-    println!("starting_path: {:#?}", starting_path);
     
     let expression = match matches.remove_many::<String>("expression") {
         Some(expression) => {
@@ -139,27 +115,8 @@ fn main() {
         }
         _ => vec!["--true".to_string()]
     };
-
-    // let types: Vec<Test> = Vec::new();
-
-    // let name: &str = match matches.get_one::<String>("name") {
-        // Some(x) => x,
-        // _ => "*"
-    // };
-    // types.push(Test::Name(name.to_string()));
-
-    // let provided_file_type: &str = match matches.get_one::<String>("type") {
-        // Some(x) => x,
-        // _ => ""
-    // };
-    // types.push(Test::Types(provided_file_type.to_string()));
-
-    // todo log as verbose:
-    // println!("Starting_path: {}", starting_path);
-    // println!("Name: {}", name);
     
-    // Somewhere here, we need to grab all parts of the expression
-
+    println!("EXPRESSION: {:#?}", expression);
     eval(expression, Searcher::<StandardLogger>::new(params, max_depth, Rc::new(Mutex::new(logger)), starting_path.unwrap_or(format!("."))));
 }
 
@@ -186,26 +143,6 @@ struct Expression {
     sub_expression: Option<Box<Vec<Expression>>>
 }
 
-enum OperatorType {
-    And,
-    Or,
-    Not
-}
-
-enum OperatorOrBool {
-    Operator(OperatorType),
-    Bool(bool)
-}
-
-struct Resolver {
-    expression: Vec<OperatorOrBool>
-}
-
-
-fn split_into_string_vec(input: String) -> Vec<String> {
-    input.split_whitespace().map(|x| x.to_owned()).collect()
-}
-
 fn some_test_returns_true(input: Vec<String>) -> bool {
     _ = input;
     true
@@ -217,7 +154,7 @@ fn some_test_returns_false(input: Vec<String>) -> bool {
 }
 
 fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
-    let iter = tokens.iter().rev();
+    let iter = tokens.iter();
 
     let mut ex = Expression {
         expression_str: Some(Box::new(tokens.clone())),
@@ -236,10 +173,6 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
                 }
             }            
             panic!("Could not find enclosing )");
-            // ex.sub_expression = match ex.sub_expression {
-                // Some(_) => extract_tokens_into_expression(tokens[i+1..], expecting_operator),
-                // None => Some(Box::new(Vec::new() [extract_tokens_into_expression(tokens[i+1..], expecting_operator)]))
-            // };
 
         }
     }
@@ -252,7 +185,6 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             } else {
                 return expression_result || eval(tokens[i+1..].to_vec(), searcher);
             }
-            // expression_result = extract_tokens_into_expression(tokens[i-2..i].to_vec(), expecting_operator) || extract_tokens_into_expression(tokens[i+1..i+3].to_vec(), expecting_operator);
         }
         if el == "--and" {
             if !expression_result {
@@ -265,20 +197,21 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             return !eval(tokens[i+1..].to_vec(), searcher);
         }
         // tests logic
+        let directory_path = Path::new(&searcher.starting_path);
         if el == "--name" { // todo maybe make one if statement for all tests?
-            // ex.expression_str = Some([*el, name.unwrap_or_else(|| panic!("--name expected a name of a file to find, but no file was provided"))]);
-            let name: String = tokens[i+1].clone();
+            let name: String = tokens.get(i + 1).expect("--name expects a file name, but found nothing").clone();
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), name.clone()]));
-            let test = Test::Name(name);
-            let directory_path = Path::new("."); // todo replace with starting_path
-            searcher.search_directory_path(directory_path, &test, Some(0));
+            let test = Test::Name(name.clone());
+            searcher.search_directory_path(directory_path, &test, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
-        if el == "--type" {
-            let r#type = tokens[i+1].clone();
+        else if el == "--type" {
+            let r#type: String = tokens.get(i + 1).expect("--type expects a file type, but found nothing").clone();
             
-            ex.expression_str = Some(Box::new(vec![el.to_string(), r#type]));
+            ex.expression_str = Some(Box::new(vec![el.to_string(), r#type.clone()]));
+            let test = Test::Types(r#type);
+            searcher.search_directory_path(directory_path, &test, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
     }
@@ -320,6 +253,7 @@ impl Logger for StandardLogger {
     }
 }
 
+#[derive(Debug)]
 enum Test {
     Name(String),
     Types(String)
@@ -360,7 +294,11 @@ impl<T: Logger> Searcher<T> {
                 return;
             }
         };
+        println!("read_dir: {:#?}", read_dir);
+        eprintln!("read_dir: {:#?}", read_dir);
         for ele in read_dir.into_iter() {
+            println!("ele: {:#?}", ele);
+            eprintln!("ele: {:#?}", ele);
             let ele = ele.unwrap();
             let file_name = ele.file_name();
             let file_type = ele.file_type().unwrap();
@@ -387,6 +325,7 @@ impl<T: Logger> Searcher<T> {
             // todo
             // self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name.clone()).to_str().unwrap().to_string()));
             let line_to_log;
+            eprintln!("test: {:#?}", test);
             line_to_log = match test {
                 Test::Name(name) if file_name.to_str().unwrap() == name => true,
                 Test::Types(provided_file_type) if 
@@ -399,6 +338,8 @@ impl<T: Logger> Searcher<T> {
                 (file_type.is_socket() && provided_file_type.contains('s')) => true,
                 _ => false,
             };
+            println!("line_to_log: {}", line_to_log);
+            eprintln!("line_to_log: {}", line_to_log);
             if line_to_log {
                 self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name).to_str().unwrap().to_string()));
                 continue;
@@ -757,4 +698,5 @@ mod tests {
         Ok(())
 
     }
+
 }
