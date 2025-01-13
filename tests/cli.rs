@@ -34,7 +34,7 @@ mod tests {
 
         // Act
         let mut cmd = Command::cargo_bin("rfind")?;
-        let val = (format!("{}", temp.to_str().unwrap()));
+        let val = format!("{}", temp.to_str().unwrap());
         println!("{:#?}", val);
         cmd.arg(format!("{}", temp.to_str().unwrap())).arg("--").arg("--type").arg("f");
 

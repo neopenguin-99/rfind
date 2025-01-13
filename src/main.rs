@@ -1,8 +1,9 @@
+use std::os::fd::FromRawFd;
 use std::{borrow::BorrowMut, cell::RefCell, fmt::Debug, ptr, rc::Rc, cell::Ref};
 use std::io;
 use std::mem::{discriminant, Discriminant};
 use std::io::{Write, Read, Seek, SeekFrom};
-use std::fs::{self, FileType};
+use std::fs::{self, FileType, ReadDir};
 use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::process::exit;
@@ -12,6 +13,9 @@ use std::sync::Mutex;
 use std::fs::File;
 use speculoos::prelude::*;
 use test_case::test_case;
+use assert_fs::prelude::*;
+use colored::Colorize;
+use predicates::prelude::*;
 
 fn main() {
     let logger = StandardLogger::new();
@@ -127,6 +131,7 @@ struct Params {
     
 }
 
+#[derive(PartialEq)]
 enum DebugOpts {
     Exec,
     Opt,
@@ -203,7 +208,7 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), name.clone()]));
             let test = Test::Name(name.clone());
-            searcher.search_directory_path(directory_path, &test, None);
+            searcher.search_directory_path(directory_path, &test, None, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         else if el == "--type" {
@@ -211,7 +216,7 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), r#type.clone()]));
             let test = Test::Types(r#type);
-            searcher.search_directory_path(directory_path, &test, None);
+            searcher.search_directory_path(directory_path, &test, None, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
     }
@@ -226,13 +231,43 @@ enum SymLinkSetting {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-enum LogLine {
-    StdOut(String),
-    StdErr(String)
+struct Line {
+    line: Message,
+    file_descriptor: Option<FileDescriptor>
+}
+
+impl Line {
+    fn new(line: Message) -> Line {
+        Line {
+            line,
+            file_descriptor: None
+        }
+    }
+
+    fn new_with_fd(line: Message, file_descriptor: Option<FileDescriptor>) -> Line {
+        Line {
+            line,
+            file_descriptor
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum FileDescriptor {
+    StdIn = 0,
+    StdOut = 1,
+    StdErr = 2
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum Message {
+    Standard(String),
+    Tree(String)
 }
 
 trait Logger {
-    fn log(&mut self, line_to_log: LogLine);
+    fn log(&mut self, line_to_log: Line);
+    fn log_as_tree(&mut self, dir_entries: Vec<(String, bool)>, preceding_str: Option<String>) -> Vec<String>;
 }
 
 struct StandardLogger { }
@@ -245,11 +280,31 @@ impl StandardLogger {
 }
 
 impl Logger for StandardLogger {
-    fn log(&mut self, line_to_log: LogLine) {
-        _ = match line_to_log {
-            LogLine::StdOut(line) => println!("{}", line),
-            LogLine::StdErr(line) => eprintln!("{}", line),
+    fn log(&mut self, line: Line) {
+        _ = match line.file_descriptor {
+            Some(line) => {
+                let x = line as i32;
+                let mut f = unsafe { File::from_raw_fd(x) };
+                write!(&mut f, "Hello, world!");
+            }
+            None => {
+                let mut f = unsafe { File::from_raw_fd(1) };
+                write!(&mut f, "Hello, world!");
+            }
         }
+    }
+
+    fn log_as_tree(&mut self, dir_entries: Vec<(String, bool)>, preceding_str: Option<String>) -> Vec<String> {
+        let result = Vec::<String>::new();
+        for entry in dir_entries {
+            if entry.1 {
+                println!("{}{}", preceding_str.clone().unwrap_or(String::new()), entry.0.green())
+            }
+            else {
+                println!("{}{}", preceding_str.clone().unwrap_or(String::new()), entry.0.red())
+            }
+        }
+        result
     }
 }
 
@@ -276,7 +331,7 @@ impl<T: Logger> Searcher<T> {
         }
     }
 
-    pub fn search_directory_path(&self, directory_path: &Path, test: &Test, current_depth: Option<u32>) {
+    pub fn search_directory_path(&self, directory_path: &Path, test: &Test, debug_opts: Option<&DebugOpts>, preceding_str: Option<String>, current_depth: Option<u32>) {
         let current_depth = current_depth.unwrap_or(0);
         let read_dir = match fs::read_dir(directory_path) {
             Ok(res) => {
@@ -296,7 +351,15 @@ impl<T: Logger> Searcher<T> {
         };
         println!("read_dir: {:#?}", read_dir);
         eprintln!("read_dir: {:#?}", read_dir);
-        for ele in read_dir.into_iter() {
+        let mut read_dir_iter = read_dir.peekable();
+        while let Some(ele) = read_dir_iter.next() {
+            let mut preceding_str = preceding_str.clone().unwrap_or(String::new()).clone();
+            if read_dir_iter.peek().is_some() && debug_opts.is_some() && *debug_opts.unwrap() == DebugOpts::Tree {
+                preceding_str.push_str("├── ")
+            }
+            else if read_dir_iter.peek().is_none() && debug_opts.is_some() && *debug_opts.unwrap() == DebugOpts::Tree {
+                preceding_str.push_str("└── ") 
+            }
             println!("ele: {:#?}", ele);
             eprintln!("ele: {:#?}", ele);
             let ele = ele.unwrap();
@@ -306,14 +369,14 @@ impl<T: Logger> Searcher<T> {
             if file_type.is_symlink() && self.params.symlink_setting == SymLinkSetting::Follow {
                 // navigate to the file pointed to by the symlink
                 let file_referred_to_by_symlink = fs::read_link(ele.path());
-                
                 _ = match file_referred_to_by_symlink {
                     Ok(file_referred_to_by_symlink_unwrapped) => {
-                        self.logger.lock().unwrap().log(LogLine::StdOut(file_referred_to_by_symlink_unwrapped.to_str().unwrap().to_string()));
+                        self.logger.lock().unwrap().log(LogLine::StdOut(format!("{}{}", preceding_str, file_referred_to_by_symlink_unwrapped.to_str().unwrap())));
                         continue;
                     }
-                    Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                        self.logger.lock().unwrap().log(LogLine::StdErr(format!("Broken symlink: {}", ele.path().to_str().unwrap().to_string())))
+                    Err(error) if error.kind() == io::ErrorKind::NotFound && read_dir_iter.peek().is_some() => {
+                        self.logger.lock().unwrap().log(LogLine::StdErr(format!("{}Broken symlink: {}", preceding_str, ele.path().to_str().unwrap())));
+                        continue;
                     }
                     Err(_) => {
                         unreachable!("We have handled both cases where read_link would result in an error, so this should be unreachable");
@@ -338,26 +401,27 @@ impl<T: Logger> Searcher<T> {
                 (file_type.is_socket() && provided_file_type.contains('s')) => true,
                 _ => false,
             };
-            println!("line_to_log: {}", line_to_log);
-            eprintln!("line_to_log: {}", line_to_log);
             if line_to_log {
                 self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name).to_str().unwrap().to_string()));
                 continue;
             }
-// logger.log(LogLine::StdOut(directory_path.join(file_name).to_str().unwrap().to_string()));
 
             if file_type.is_dir() && (self.max_depth.is_some() && current_depth < self.max_depth.unwrap() || self.max_depth.is_none()) {
                 let file_name = ele.file_name();
                 let file_name: &str = file_name.to_str().unwrap();
                 let directory_path = directory_path.join(file_name);
                 let directory_path = directory_path.as_path();
-                self.search_directory_path(directory_path, test, Some(current_depth + 1));
+
+                let preceding_str_2: String;
+                match read_dir_iter.peek() {
+                    Some(_) => preceding_str_2 = format!("{}| ", preceding_str),
+                    None => preceding_str_2 = format!("{}  ", preceding_str)
+                }
+                self.search_directory_path(directory_path, test, debug_opts, Some(preceding_str_2), Some(current_depth + 1));
             }
         }
     }
 }
-
-
 
 #[cfg(test)]
 use mockall::{automock, mock, predicate::*};
@@ -373,12 +437,17 @@ struct TestLogger {
 impl TestLogger {
     fn new() -> TestLogger {
         TestLogger {
-            log: Vec::new()
+            stdout_logs: Vec::new(),
+            stderr_logs: Vec::new()
         }
     }
 
-    fn get_logs(&self) -> &Vec<LogLine> {
-        &self.log
+    fn get_stdout_logs(&self) -> &Vec<LogLine> {
+        &self.stdout_logs
+    }
+
+    fn get_stderr_logs(&self) -> &Vec<LogLine> {
+        &self.stderr_logs
     }
 
     fn is_enum_variant(value: &LogLine, d: Discriminant<LogLine>) -> bool {
@@ -396,8 +465,21 @@ impl TestLogger {
 }
 
 impl Logger for TestLogger {
-    fn log(&mut self, line_to_log: LogLine) {
-        self.log.push(line_to_log);
+    fn log(&mut self, line_to_log: String, file_descriptor: Option<FileDescriptor>) {
+        self.stdout_log.push(line_to_log);
+    }
+
+    fn log_as_tree(&mut self, dir_entries: Vec<(String, bool)>, preceding_str: Option<String>) -> Vec<String> {
+        let result = Vec::<String>::new();
+        for entry in dir_entries {
+            if entry.1 {
+                println!("{}{}", preceding_str.clone().unwrap_or(String::new()), entry.0.green())
+            }
+            else {
+                println!("{}{}", preceding_str.clone().unwrap_or(String::new()), entry.0.red())
+            }
+        }
+        result
     }
 }
 
@@ -424,7 +506,7 @@ mod tests {
         let test_by_name = Test::Name(file.path().file_name().unwrap().to_str().unwrap().to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
         
         // Assert 
         let a = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new()))); //todo why
@@ -457,7 +539,7 @@ mod tests {
         let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -489,7 +571,7 @@ mod tests {
         let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -522,7 +604,7 @@ mod tests {
         let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -552,7 +634,7 @@ mod tests {
         let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None);
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -591,7 +673,7 @@ mod tests {
         let test_by_name = Test::Name("does_not_follow_symbolic_links_by_default.txt".to_string());
         
         // Act
-        searcher.search_directory_path(current_directory.path(), &test_by_name, None);
+        searcher.search_directory_path(current_directory.path(), &test_by_name, None, None, None);
 
         // Assert
          let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -631,7 +713,7 @@ mod tests {
         let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None);
+        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -679,7 +761,7 @@ mod tests {
         let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None);
+        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None, None);
 
         // Assert
         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -699,4 +781,41 @@ mod tests {
 
     }
 
+    #[test]
+    fn check_debug_opts_tree_logs_correctly() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        let temp = assert_fs::TempDir::new().unwrap();
+        let inputs_files = vec![temp.child("foo1.txt"), temp.child("foo2.txt"), temp.child("check_debug_opts_tree_logs_correctly_sub_dir/foo3.txt"), temp.child("check_debug_opts_tree_logs_correctly_sub_dir/foo4.txt")];
+        for input_file in inputs_files {
+            input_file.touch()?;
+        }
+
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+
+        let params = Params {
+            symlink_setting: SymLinkSetting::Never,
+            debug_opts: None,
+            optimisation_level: None
+        };
+
+        let debug_opts = DebugOpts::Exec;
+
+        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let test = Test::Name("foo4.txt".to_string());
+
+        // Act
+        searcher.search_directory_path(temp.path(), &test, Some(&debug_opts), None, None);
+
+        // Assert
+        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+
+        println!("{:#?}", stdout_logs);
+        
+        stdout_logs.into_iter().filter(|predicate| {
+            *predicate
+        });
+        assert!(stdout_logs.ends_with(&LogLine::StdOut(format!("foo4.txt"))));
+        // Teardown
+        Ok(())
+    }
 }
