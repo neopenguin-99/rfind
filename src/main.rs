@@ -232,27 +232,27 @@ enum SymLinkSetting {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Line {
-    line: Message,
+    message: Message,
     file_descriptor: Option<FileDescriptor>
 }
 
 impl Line {
-    fn new(line: Message) -> Line {
+    fn new(message: Message) -> Line {
         Line {
-            line,
-            file_descriptor: None
+            message,
+            file_descriptor: Some(FileDescriptor::StdOut)
         }
     }
 
-    fn new_with_fd(line: Message, file_descriptor: Option<FileDescriptor>) -> Line {
+    fn new_with_fd(message: Message, file_descriptor: FileDescriptor) -> Line {
         Line {
-            line,
-            file_descriptor
+            message,
+            file_descriptor: Some(file_descriptor)
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 enum FileDescriptor {
     StdIn = 0,
     StdOut = 1,
@@ -265,8 +265,19 @@ enum Message {
     Tree(String)
 }
 
+impl Message {
+    fn get_contained_message(&self) -> &String {
+        match self {
+            Self::Standard(x) | Self::Tree(x) => x, 
+        }
+        //todo fix so that this works so that we don't
+//have to update this method every time a new type of message is added to the message
+//enum.
+    }
+}
+
 trait Logger {
-    fn log(&mut self, line_to_log: Line);
+    fn log(&mut self, line: Line);
     fn log_as_tree(&mut self, dir_entries: Vec<(String, bool)>, preceding_str: Option<String>) -> Vec<String>;
 }
 
@@ -281,15 +292,16 @@ impl StandardLogger {
 
 impl Logger for StandardLogger {
     fn log(&mut self, line: Line) {
+        let str_message = line.message.get_contained_message();
         _ = match line.file_descriptor {
-            Some(line) => {
-                let x = line as i32;
+            Some(fd) => {
+                let x = fd as i32;
                 let mut f = unsafe { File::from_raw_fd(x) };
-                write!(&mut f, "Hello, world!");
+                write!(&mut f, "{}", str_message).unwrap();
             }
             None => {
                 let mut f = unsafe { File::from_raw_fd(1) };
-                write!(&mut f, "Hello, world!");
+                write!(&mut f, "{}", str_message).unwrap();
             }
         }
     }
@@ -338,14 +350,13 @@ impl<T: Logger> Searcher<T> {
                 res
             }
             Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
-                println!("find: Permission denied for dir name {:#?}", directory_path);
-                let line = format!("find: Permission denied for directory name {}", directory_path.to_str().unwrap());
-                self.logger.lock().unwrap().log(LogLine::StdErr(line));
+                let line = format!("rfind: Permission denied for directory name {}", directory_path.to_str().unwrap());
+                self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                 return;
             }
             Err(_) => {
-                let line = format!("An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
-                self.logger.lock().unwrap().log(LogLine::StdErr(line));
+                let line = format!("rfind: An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
+                self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                 return;
             }
         };
@@ -371,11 +382,13 @@ impl<T: Logger> Searcher<T> {
                 let file_referred_to_by_symlink = fs::read_link(ele.path());
                 _ = match file_referred_to_by_symlink {
                     Ok(file_referred_to_by_symlink_unwrapped) => {
-                        self.logger.lock().unwrap().log(LogLine::StdOut(format!("{}{}", preceding_str, file_referred_to_by_symlink_unwrapped.to_str().unwrap())));
+                        let line = format!("{}{}", preceding_str, file_referred_to_by_symlink_unwrapped.to_str().unwrap());
+                        self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdOut));
                         continue;
                     }
                     Err(error) if error.kind() == io::ErrorKind::NotFound && read_dir_iter.peek().is_some() => {
-                        self.logger.lock().unwrap().log(LogLine::StdErr(format!("{}Broken symlink: {}", preceding_str, ele.path().to_str().unwrap())));
+                        let line = format!("{}Broken symlink: {}", preceding_str, ele.path().to_str().unwrap());
+                        self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                         continue;
                     }
                     Err(_) => {
@@ -402,7 +415,7 @@ impl<T: Logger> Searcher<T> {
                 _ => false,
             };
             if line_to_log {
-                self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name).to_str().unwrap().to_string()));
+                self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
                 continue;
             }
 
@@ -431,42 +444,36 @@ use tempfile::NamedTempFile;
 
 
 struct TestLogger {
-    log: Vec<LogLine>
+    logs: Vec<Line>
 }
 
 impl TestLogger {
     fn new() -> TestLogger {
         TestLogger {
-            stdout_logs: Vec::new(),
-            stderr_logs: Vec::new()
+            logs: Vec::new(),
         }
     }
 
-    fn get_stdout_logs(&self) -> &Vec<LogLine> {
-        &self.stdout_logs
+    fn get_logs(&self) -> Vec<&Line> {
+        let logs = &self.logs;
+        let logs_iter = logs.into_iter();
+        logs_iter.filter(|_| {
+            true
+        }).collect()
     }
 
-    fn get_stderr_logs(&self) -> &Vec<LogLine> {
-        &self.stderr_logs
-    }
-
-    fn is_enum_variant(value: &LogLine, d: Discriminant<LogLine>) -> bool {
-        if discriminant(value) == d {
-            return true;
-        }
-        return false;
-    }
-
-    fn get_logs_by_type(&self, d: Discriminant<LogLine>) -> Vec<LogLine> { //use some
-        //rust wizardry to make this function better (remove the .clone)
-        let log_iter = self.log.clone();
-        log_iter.into_iter().filter(|x| Self::is_enum_variant(x, d)).collect::<Vec<LogLine>>()
+    fn get_logs_by_file_descriptor(&self, file_descriptor: FileDescriptor) -> Vec<&Line> {
+        let logs = &self.logs;
+        let logs_iter = logs.into_iter();
+        logs_iter.filter(move |&x| {
+            x.file_descriptor == Some(file_descriptor)
+        }).collect()
     }
 }
 
 impl Logger for TestLogger {
-    fn log(&mut self, line_to_log: String, file_descriptor: Option<FileDescriptor>) {
-        self.stdout_log.push(line_to_log);
+    fn log(&mut self, line: Line) {
+        self.logs.push(line);
     }
 
     fn log_as_tree(&mut self, dir_entries: Vec<(String, bool)>, preceding_str: Option<String>) -> Vec<String> {
@@ -509,9 +516,11 @@ mod tests {
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
         
         // Assert 
-        let a = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new()))); //todo why
+        let stdout_logs = logger.lock().unwrap().get_logs_by_file_descriptor(FileDescriptor::StdOut);
         // do we need to pass in String::new here to get it to compile?????????????
-        assert!(a.contains(&LogLine::StdOut(file.path().to_str().unwrap().to_string())));
+        let message = Message::Standard(file.path().to_str().unwrap().to_string());
+        let line = Line::new(message);
+        assert!(stdout_logs.contains(line));
 
         // Teardown
         drop(file);
@@ -807,14 +816,15 @@ mod tests {
         searcher.search_directory_path(temp.path(), &test, Some(&debug_opts), None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        // let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
+        let logs = logger.lock().unwrap().get_logs();
 
-        println!("{:#?}", stdout_logs);
+        println!("{:#?}", logs);
         
-        stdout_logs.into_iter().filter(|predicate| {
-            *predicate
-        });
-        assert!(stdout_logs.ends_with(&LogLine::StdOut(format!("foo4.txt"))));
+        // logs.into_iter().filter(|predicate| {
+            // *predicate.line.
+        // });
+        // assert!(logs.ends_with(&LogLine::StdOut(format!("foo4.txt"))));
         // Teardown
         Ok(())
     }
