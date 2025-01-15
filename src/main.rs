@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::os::fd::FromRawFd;
 use std::{borrow::BorrowMut, cell::RefCell, fmt::Debug, ptr, rc::Rc, cell::Ref};
 use std::io;
@@ -360,8 +361,6 @@ impl<T: Logger> Searcher<T> {
                 return;
             }
         };
-        println!("read_dir: {:#?}", read_dir);
-        eprintln!("read_dir: {:#?}", read_dir);
         let mut read_dir_iter = read_dir.peekable();
         while let Some(ele) = read_dir_iter.next() {
             let mut preceding_str = preceding_str.clone().unwrap_or(String::new()).clone();
@@ -371,8 +370,6 @@ impl<T: Logger> Searcher<T> {
             else if read_dir_iter.peek().is_none() && debug_opts.is_some() && *debug_opts.unwrap() == DebugOpts::Tree {
                 preceding_str.push_str("└── ") 
             }
-            println!("ele: {:#?}", ele);
-            eprintln!("ele: {:#?}", ele);
             let ele = ele.unwrap();
             let file_name = ele.file_name();
             let file_type = ele.file_type().unwrap();
@@ -401,7 +398,6 @@ impl<T: Logger> Searcher<T> {
             // todo
             // self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name.clone()).to_str().unwrap().to_string()));
             let line_to_log;
-            eprintln!("test: {:#?}", test);
             line_to_log = match test {
                 Test::Name(name) if file_name.to_str().unwrap() == name => true,
                 Test::Types(provided_file_type) if 
@@ -469,6 +465,16 @@ impl TestLogger {
             x.file_descriptor == Some(file_descriptor)
         }).collect()
     }
+
+    fn get_lines_from_logs_where_logs_contains_provided_value(lines: Vec<&Line>, line_to_find: String) -> bool {
+        for line in lines.into_iter() {
+            let message = line.message.get_contained_message().clone().to_string();
+            if message.contains(&line_to_find) {
+                return true;
+            }
+        };
+        false
+    }
 }
 
 impl Logger for TestLogger {
@@ -510,17 +516,17 @@ mod tests {
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
-        let test_by_name = Test::Name(file.path().file_name().unwrap().to_str().unwrap().to_string());
+        let file_name_with_extension = file.path().file_name().unwrap().to_str().unwrap().to_string();
+        let test_by_name = Test::Name(file_name_with_extension.clone());
 
         // Act
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
         
-        // Assert 
-        let stdout_logs = logger.lock().unwrap().get_logs_by_file_descriptor(FileDescriptor::StdOut);
-        // do we need to pass in String::new here to get it to compile?????????????
-        let message = Message::Standard(file.path().to_str().unwrap().to_string());
-        let line = Line::new(message);
-        assert!(stdout_logs.contains(line));
+        // Assert  
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), file.path().to_str().unwrap().to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", file_name_with_extension, stdout_logs));
 
         // Teardown
         drop(file);
@@ -530,6 +536,7 @@ mod tests {
     #[test]
     fn find_file_in_child_directory() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
+        const FILE_NAME_WITH_EXTENSION: &'static str = "find_file_in_child_directory.txt";
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
@@ -541,19 +548,19 @@ mod tests {
         
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
-        let file_path = directory.path().join("find_file_in_child_directory.txt");
+        let file_path = directory.path().join(FILE_NAME_WITH_EXTENSION);
         
         // Create a file inside of the newly created directory
         let tmp_file = File::create(file_path.clone())?;
-        let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        assert_that(stdout_logs.first().unwrap()).is_equal_to(&LogLine::StdOut(file_path.to_str().unwrap().to_string()));
-        //assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs, FILE_NAME_WITH_EXTENSION.to_string()));
 
         // Teardown
         drop(tmp_file);
@@ -563,6 +570,9 @@ mod tests {
 
     #[test]
     fn find_file_in_child_child_directory() -> Result<(), Box<dyn std::error::Error>> {
+        const FILE_NAME: &'static str = "find_file_in_child_child_directory";
+        const FILE_NAME_WITH_EXTENSION: &'static str = "find_file_in_child_child_directory.txt";
+
         // Arrange
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
         let params = Params {
@@ -573,19 +583,20 @@ mod tests {
         let logger = Rc::new(Mutex::new(TestLogger::new()));
         let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
-        let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
-        let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
-        let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
+        let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
+        let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
+        let file_path = temp_dir_child.path().join(FILE_NAME_WITH_EXTENSION);
         let tmp_file = File::create(file_path.clone());
-        let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        assert!(stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
-
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         drop(tmp_file);
@@ -596,6 +607,8 @@ mod tests {
 
     #[test]
     fn does_not_find_file_in_child_directory_when_max_depth_is_set_to_zero() -> Result<(), Box<dyn std::error::Error>> {
+        const FILE_NAME_WITH_EXTENSION: &'static str = "find_file_in_child_directory.txt";
+
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
@@ -607,17 +620,19 @@ mod tests {
 
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
-        let file_path = directory.path().join("find_file_in_child_directory.txt");
+        let file_path = directory.path().join(FILE_NAME_WITH_EXTENSION);
         // Create a file inside of the newly created directory
         let tmp_file = File::create(file_path.clone())?;
-        let test_by_name = Test::Name("find_file_in_child_directory.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        assert!(!stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(!TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         drop(tmp_file);
@@ -627,6 +642,8 @@ mod tests {
 
     #[test]
     fn does_not_find_file_in_child_child_directory_when_max_depth_is_set_to_one() -> Result<(), Box<dyn std::error::Error>> {
+        const FILE_NAME: &'static str = "find_file_in_child_child_directory";
+        const FILE_NAME_WITH_EXTENSION: &'static str = "find_file_in_child_child_directory.txt";
         assert_eq!(tempfile::env::temp_dir(), std::env::temp_dir());
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
@@ -636,18 +653,20 @@ mod tests {
         let logger = Rc::new(Mutex::new(TestLogger::new()));
         let searcher = Searcher::new(params, Some(1), logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
-        let directory = Builder::new().prefix("find_file_in_child_child_directory").tempdir().unwrap();
-        let temp_dir_child = Builder::new().prefix("find_file_in_child_child_directory").tempdir_in(directory.path()).unwrap();
-        let file_path = temp_dir_child.path().join("find_file_in_child_child_directory.txt");
+        let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
+        let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
+        let file_path = temp_dir_child.path().join(FILE_NAME_WITH_EXTENSION);
         let tmp_file = File::create(file_path.clone());
-        let test_by_name = Test::Name("find_file_in_child_child_directory.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
         searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        assert!(!stdout_logs.contains(&LogLine::StdOut(file_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(!TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         drop(tmp_file);
@@ -658,13 +677,14 @@ mod tests {
 
     #[test]
     fn does_not_follow_symbolic_links_by_default() -> Result<(), Box<dyn std::error::Error>> {
-        // Arrange
+        // Arrange 
+        const FILE_NAME_WITH_EXTENSION: &'static str = "does_not_follow_symbolic_links_by_default.txt";
         let current_directory = TempDir::new()?;
         let directory_of_link = TempDir::new()?;
         let working_directory_before_test = std::env::current_dir().unwrap();
         assert!(std::env::set_current_dir(current_directory.path()).is_ok());
 
-        let original_file_path = current_directory.path().join("does_not_follow_symbolic_links_by_default.txt");
+        let original_file_path = current_directory.path().join(FILE_NAME_WITH_EXTENSION);
         let original_file = File::create(original_file_path.clone())?;
 
         let directory_of_link_path = directory_of_link.path().join("symlink");
@@ -679,14 +699,16 @@ mod tests {
         };
 
         let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string()); 
-        let test_by_name = Test::Name("does_not_follow_symbolic_links_by_default.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
         searcher.search_directory_path(current_directory.path(), &test_by_name, None, None, None);
 
         // Assert
-         let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-         assert!(!stdout_logs.contains(&LogLine::StdOut(directory_of_link_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         current_directory.close()?;
@@ -699,12 +721,13 @@ mod tests {
     #[test]
     fn follows_symlink_when_set_to_follow() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
+        const FILE_NAME_WITH_EXTENSION: &'static str = "follows_symlink_when_set_to_follow.txt";
         let directory_of_file = TempDir::new()?;
         let directory_of_link = TempDir::new()?;
         // let working_directory_before_test = std::env::current_dir().unwrap();
         assert!(std::env::set_current_dir(directory_of_link.path()).is_ok());
 
-        let original_file_path = directory_of_file.path().join("follows_symlink_when_set_to_follow.txt");
+        let original_file_path = directory_of_file.path().join(FILE_NAME_WITH_EXTENSION);
         let original_file = File::create(original_file_path.clone())?;
 
         let directory_of_link_path = directory_of_link.path().join("symlink");
@@ -719,19 +742,16 @@ mod tests {
         };
 
         let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
-        let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
         searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-
-        eprintln!("stdout logs {:#?}", stdout_logs);
-        eprintln!("file path {:#?}", original_file_path.to_str().unwrap().to_string());
-        eprintln!("link path {:#?}", directory_of_link_path.to_str().unwrap().to_string());
-        eprintln!("env: {}", std::env::current_dir().unwrap().to_str().unwrap().to_string());
-        assert!(stdout_logs.contains(&LogLine::StdOut(original_file_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         directory_of_file.close()?;
@@ -744,12 +764,13 @@ mod tests {
     #[test]
     fn handle_broken_symlink() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange
+        const FILE_NAME_WITH_EXTENSION: &'static str = "handle_broken_symlink.txt";
         let directory_of_file = TempDir::new()?;
         let directory_of_link = TempDir::new()?;
         // let working_directory_before_test = std::env::current_dir().unwrap();
         assert!(std::env::set_current_dir(directory_of_link.path()).is_ok());
 
-        let original_file_path = directory_of_file.path().join("follows_symlink_when_set_to_follow.txt");
+        let original_file_path = directory_of_file.path().join(FILE_NAME_WITH_EXTENSION);
         let original_file = File::create(original_file_path.clone())?;
 
         let directory_of_link_path = directory_of_link.path().join("symlink");
@@ -767,19 +788,16 @@ mod tests {
         };
 
         let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
-        let test_by_name = Test::Name("follows_symlink_when_set_to_follow.txt".to_string());
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
         searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None, None);
 
         // Assert
-        let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-
-        eprintln!("stdout logs {:#?}", stdout_logs);
-        eprintln!("file path {:#?}", original_file_path.to_str().unwrap().to_string());
-        eprintln!("link path {:#?}", directory_of_link_path.to_str().unwrap().to_string());
-        eprintln!("env: {}", std::env::current_dir().unwrap().to_str().unwrap().to_string());
-        assert!(stdout_logs.contains(&LogLine::StdOut(original_file_path.to_str().unwrap().to_string())));
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
 
         // Teardown
         directory_of_file.close()?;
@@ -817,9 +835,9 @@ mod tests {
 
         // Assert
         // let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
-        let logs = logger.lock().unwrap().get_logs();
-
-        println!("{:#?}", logs);
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs, "foo4.txt".to_string()));
         
         // logs.into_iter().filter(|predicate| {
             // *predicate.line.
