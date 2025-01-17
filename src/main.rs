@@ -197,6 +197,12 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
 
     let mut expression_result: bool = false;
     for (i, el) in iter.enumerate() {
+        if el == "--true" {
+            expression_result = true;
+        }
+        if el == "--false" {
+            expression_result = false;
+        }
         if el == "--or" {
             if expression_result {
                 return true;
@@ -320,7 +326,7 @@ impl Logger for StandardLogger {
                 write!(&mut f, "{}", str_message).unwrap();
             }
             None => {
-                println!("FROM FD: {}", 1);
+                println!("{}", 1);
                 let mut f = unsafe { File::from_raw_fd(1) };
                 write!(&mut f, "{}", str_message).unwrap();
             }
@@ -385,12 +391,14 @@ impl<T: Logger> Searcher<T> {
         let mut read_dir_iter = read_dir.peekable();
         while let Some(ele) = read_dir_iter.next() {
             let mut preceding_str = preceding_str.clone().unwrap_or(String::new()).clone();
-            let debug_opts = self.params.debug_opts.as_ref().unwrap();
-            if read_dir_iter.peek().is_some() && self.params.debug_opts.is_some() && *debug_opts == DebugOpts::Tree {
-                preceding_str.push_str("├── ")
-            }
-            else if read_dir_iter.peek().is_none() && self.params.debug_opts.is_some() && *debug_opts == DebugOpts::Tree {
-                preceding_str.push_str("└── ") 
+            if self.params.debug_opts.is_some() {
+                let debug_opts = self.params.debug_opts.as_ref().unwrap();
+                if read_dir_iter.peek().is_some() && *debug_opts == DebugOpts::Tree {
+                    preceding_str.push_str("├── ")
+                }
+                else if read_dir_iter.peek().is_none() && *debug_opts == DebugOpts::Tree {
+                    preceding_str.push_str("└── ") 
+                }
             }
             let ele = ele.unwrap();
             let file_name = ele.file_name();
@@ -523,6 +531,7 @@ impl Logger for TestLogger {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use self::test_case;
 
     #[test]
     fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
@@ -897,12 +906,11 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    #[test_case("false", "", false ; "Expect false when both operands are false")]
-    #[test_case(false, true, false ; "Expect false when first operand is false and second operand is true")]
-    #[test_case(true, false, false ; "Expect false when first operand is true and second operand is false")]
-    #[test_case(true, true, true ; "Expect true when both operands are true")]
-    fn check_and_operator_works(first_operand: &str, second_operand: &str, expected: bool) -> Result<(), Box<dyn std::error::Error>> { 
+    #[test_case("--false", "--false", false ; "Expect false when both operands are false")]
+    #[test_case("--false", "--true", false ; "Expect false when first operand is false and second operand is true")]
+    #[test_case("--true", "--false", false ; "Expect false when first operand is true and second operand is false")]
+    #[test_case("--true", "--true", true ; "Expect true when both operands are true")]
+    fn check_and_operator_works(first_operand: &str, second_operand: &str, expected: bool) -> Result<(), Box<dyn std::error::Error>> {
         let temp = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp.path())?;
 
@@ -913,8 +921,58 @@ mod tests {
             debug_opts: None,
             optimisation_level: None
         };
+        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
 
+        let operator = format!("--and");
+        let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
 
+        assert_eq!(eval(tokens, searcher), expected);
+        Ok(())
+    }
+
+    #[test_case("--false", "--false", false ; "Expect false when both operands are false")]
+    #[test_case("--false", "--true", true ; "Expect true when first operand is false and second operand is true")]
+    #[test_case("--true", "--false", true ; "Expect true when first operand is true and second operand is false")]
+    #[test_case("--true", "--true", true ; "Expect true when both operands are true")]
+    fn check_or_operator_works(first_operand: &str, second_operand: &str, expected: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let temp = assert_fs::TempDir::new()?;
+        std::env::set_current_dir(temp.path())?;
+
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+
+        let params = Params {
+            symlink_setting: SymLinkSetting::Never,
+            debug_opts: None,
+            optimisation_level: None
+        };
+        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+
+        let operator = format!("--or");
+        let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
+
+        assert_eq!(eval(tokens, searcher), expected);
+        Ok(())
+    }
+
+    #[test_case("--true", false ; "Expect false when operand is true")]
+    #[test_case("--false", true ; "Expect true when operand is false")]
+    fn check_not_operator_works(operand: &str, expected: bool) -> Result<(), Box<dyn std::error::Error>> {
+        let temp = assert_fs::TempDir::new()?;
+        std::env::set_current_dir(temp.path())?;
+
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+        
+        let params = Params {
+            symlink_setting: SymLinkSetting::Never,
+            debug_opts: None,
+            optimisation_level: None
+        };
+        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+
+        let operator = format!("--not");
+        let tokens = [operator, operand.to_owned()].to_vec();
+
+        assert_eq!(eval(tokens, searcher), expected);
         Ok(())
     }
 }
