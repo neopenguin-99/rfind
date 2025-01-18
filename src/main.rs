@@ -24,8 +24,8 @@ fn main() {
 
 
     let mut matches: ArgMatches = Command::new("MyApp")
-        //.version(crate_version!())
-        //.author(crate_authors!("\n"))
+        .version(crate_version!())
+        .author(crate_authors!("\n"))
         .arg(Arg::new("symlink_never")
             .short('P')
             .action(ArgAction::SetTrue)
@@ -59,6 +59,12 @@ fn main() {
             Using max depth of 0 will apply the expression 
             for files only in the current directory, and will not search subdirectories")
         )
+        .arg(Arg::new("min_depth")
+            .value_parser(value_parser!(u32))
+            .long("mindepth")
+            .action(ArgAction::Set)
+            .help("Do not apply any tests or actions at levels less than levels (a  non-negative  integer).
+              Using -mindepth 1 means process all files except the starting-points."))
         .arg(Arg::new("name")
             .long("name")
             .help("The name of the file to find")
@@ -116,6 +122,8 @@ fn main() {
 
     let max_depth = matches.remove_one::<u32>("max_depth");
 
+    let min_depth = matches.remove_one::<u32>("min_depth");
+
     let starting_path = matches.remove_one::<String>("starting_path");
     
     let expression = match matches.remove_many::<String>("expression") {
@@ -129,7 +137,7 @@ fn main() {
         _ => vec!["--true".to_string()]
     };
     
-    let searcher = Searcher::<StandardLogger>::new(params, max_depth, Rc::new(Mutex::new(logger)), starting_path.unwrap_or(format!(".")));
+    let searcher = Searcher::<StandardLogger>::new(params, max_depth, min_depth, Rc::new(Mutex::new(logger)), starting_path.unwrap_or(format!(".")));
     println!("{:#?}", searcher);
     eval(expression, searcher);
 }
@@ -355,6 +363,7 @@ enum Test {
 
 #[derive(Debug)]
 struct Searcher<T: Logger> {
+    min_depth: Option<u32>,
     max_depth: Option<u32>,
     params: Params,
     logger: Rc<Mutex<T>>,
@@ -362,11 +371,12 @@ struct Searcher<T: Logger> {
 }
 
 impl<T: Logger> Searcher<T> {
-    pub fn new(params: Params, max_depth: Option<u32>, logger: Rc<Mutex<T>>, starting_path: String) -> Searcher<T> {
+    pub fn new(params: Params, max_depth: Option<u32>, min_depth: Option<u32>, logger: Rc<Mutex<T>>, starting_path: String) -> Searcher<T> {
         Searcher {
             logger,
             params,
             max_depth,
+            min_depth,
             starting_path
         }
     }
@@ -440,7 +450,7 @@ impl<T: Logger> Searcher<T> {
                 (file_type.is_socket() && provided_file_type.contains('s')) => true,
                 _ => false,
             };
-            if line_to_log {
+            if line_to_log && (self.min_depth.is_some() && current_depth >= self.min_depth.unwrap()) || self.min_depth.is_none() {
                 self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
                 continue;
             }
@@ -543,7 +553,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
@@ -575,7 +585,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
         
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -612,7 +622,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
         let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
@@ -647,7 +657,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, Some(0), logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, Some(0), None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -682,7 +692,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, Some(1), logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, Some(1), None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
 
         let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
@@ -703,6 +713,37 @@ mod tests {
         drop(tmp_file);
         temp_dir_child.close()?;
         directory.close()?;
+        Ok(())
+    }
+
+    #[test]
+    fn does_not_find_file_in_current_directory_when_min_depth_is_set_to_one() -> Result<(), Box<dyn std::error::Error>> {
+        // Arrange
+        const FILE_NAME_WITH_EXTENSION: &'static str = "does_not_find_file_in_current_directory_when_min_depth_is_set_to_one.txt";
+        let temp = assert_fs::TempDir::new()?;
+        std::env::set_current_dir(temp.path())?;
+
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+
+        let params = Params {
+            symlink_setting: SymLinkSetting::Never,
+            debug_opts: None,
+            optimisation_level: None
+        };
+
+        let searcher = Searcher::new(params, None, Some(1), logger.clone(), temp.path().to_str().unwrap().to_string());
+        temp.child(FILE_NAME_WITH_EXTENSION).touch()?;
+        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
+
+        // Act
+        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+
+        // Assert
+        let logs = logger.lock().unwrap();
+        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
+        assert!(!TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
+            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
+
         Ok(())
     }
 
@@ -729,7 +770,7 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string()); 
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string()); 
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
@@ -772,7 +813,7 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
@@ -818,7 +859,7 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
@@ -857,7 +898,7 @@ mod tests {
         };
 
 
-        let searcher = Searcher::new(params, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
         let test = Test::Name("foo4.txt".to_string());
 
         // Act
@@ -900,7 +941,7 @@ mod tests {
         // todo add more
         let test = Test::Name("empty_file.txt".to_string());
         
-        let searcher = Searcher::new(params, None, logger.clone(), std::env::current_dir().unwrap().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), std::env::current_dir().unwrap().to_str().unwrap().to_string());
         searcher.search_directory_path(temp.path(), &test, None, None);
         
         Ok(())
@@ -921,7 +962,7 @@ mod tests {
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
 
         let operator = format!("--and");
         let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
@@ -945,7 +986,7 @@ mod tests {
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
 
         let operator = format!("--or");
         let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
@@ -967,7 +1008,7 @@ mod tests {
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
 
         let operator = format!("--not");
         let tokens = [operator, operand.to_owned()].to_vec();
