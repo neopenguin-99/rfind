@@ -1,5 +1,6 @@
 pub use self::message::Message;
 pub mod message {
+    use crate::main::*;
     #[derive(Clone, Debug, PartialEq)]
     pub enum Message {
         Standard(String),

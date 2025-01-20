@@ -1,7 +1,7 @@
 pub use self::line::Line;
-
 pub mod line {
-    #[deriv(Clone, Debug, PartialEq)]
+    use crate::main::*;
+    #[derive(Clone, Debug, PartialEq)]
     pub struct Line {
         message: Message,
         file_descriptor: Option<FileDescriptor>

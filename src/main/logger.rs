@@ -1,4 +1,6 @@
+pub use self::logger::Logger;
 pub mod logger {
+    use crate::main::*;
 
     pub trait Logger {
         fn log(&mut self, line: Line);
