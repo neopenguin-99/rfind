@@ -1,6 +1,22 @@
+
 pub use self::searcher::Searcher;
 pub mod searcher {
-    use crate::main::*;
+    use std::io::ErrorKind;
+    use std::fs::{self, FileType, ReadDir};
+    use std::{borrow::BorrowMut, cell::RefCell, fmt::Debug, ptr, rc::Rc, cell::Ref};
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::fs::FileTypeExt;
+    use std::sync::Mutex;
+    use std::path::Path;
+
+    use crate::main::symlinksetting::SymLinkSetting;
+    use crate::main::test::Test;
+    use crate::main::logger::Logger;
+    use crate::main::params::Params;
+    use crate::main::filedescriptor::FileDescriptor;
+    use crate::main::message::Message;
+    use crate::main::line::Line;
+    use crate::main::debugopts::DebugOpts;
     #[derive(Debug)]
     pub struct Searcher<T: Logger> {
         min_depth: Option<u32>,
@@ -27,7 +43,7 @@ pub mod searcher {
                 Ok(res) => {
                     res
                 }
-                Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+                Err(error) if error.kind() == ErrorKind::PermissionDenied => {
                     let line = format!("rfind: Permission denied for directory name {}", directory_path.to_str().unwrap());
                     self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                     return;
@@ -63,7 +79,7 @@ pub mod searcher {
                             self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdOut));
                             continue;
                         }
-                        Err(error) if error.kind() == io::ErrorKind::NotFound && read_dir_iter.peek().is_some() => {
+                        Err(error) if error.kind() == ErrorKind::NotFound && read_dir_iter.peek().is_some() => {
                             let line = format!("{}Broken symlink: {}", preceding_str, ele.path().to_str().unwrap());
                             self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                             continue;

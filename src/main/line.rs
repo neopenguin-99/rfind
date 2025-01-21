@@ -1,21 +1,23 @@
 pub use self::line::Line;
 pub mod line {
     use crate::main::*;
+    use crate::main::message::Message;
+    use crate::main::filedescriptor::FileDescriptor;
     #[derive(Clone, Debug, PartialEq)]
     pub struct Line {
-        message: Message,
-        file_descriptor: Option<FileDescriptor>
+        pub message: Message,
+        pub file_descriptor: Option<FileDescriptor>
     }
 
     impl Line {
-        fn new(message: Message) -> Line {
+        pub fn new(message: Message) -> Line {
             Line {
                 message,
                 file_descriptor: Some(FileDescriptor::StdOut)
             }
         }
 
-        fn new_with_fd(message: Message, file_deecriptor: FileDescriptor) -> Line {
+        pub fn new_with_fd(message: Message, file_descriptor: FileDescriptor) -> Line {
             Line {
                 message,
                 file_descriptor: Some(file_descriptor)

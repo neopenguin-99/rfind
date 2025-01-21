@@ -8,7 +8,7 @@ pub mod message {
     }
 
     impl Message {
-        fn get_contained_message(&self) -> &String {
+        pub fn get_contained_message(&self) -> &String {
             match self {
                 Self::Standard(x) | Self::Tree(x) => x, 
             }

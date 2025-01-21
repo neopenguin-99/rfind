@@ -1,6 +1,9 @@
 pub use self::testlogger::TestLogger;
 pub mod testlogger {
     use crate::main::*;
+    use crate::main::line::Line;
+    use crate::main::filedescriptor::FileDescriptor;
+    use crate::main::logger::Logger;
     pub struct TestLogger {
         logs: Vec<Line>
     }

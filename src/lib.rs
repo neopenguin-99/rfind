@@ -27,6 +27,7 @@ pub mod main {
     pub mod logger;
     pub mod symlinksetting;
     pub mod params;
+    pub mod standardlogger;
     pub mod testlogger;
     pub mod test;
     pub mod filedescriptor;

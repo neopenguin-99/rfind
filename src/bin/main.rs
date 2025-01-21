@@ -22,6 +22,17 @@ use std::thread;
 use std::time::Duration;
 
 use rfind::main::*;
+use rfind::main::standardlogger::standardlogger::StandardLogger;
+use rfind::main::logger::logger::Logger;
+use rfind::main::symlinksetting::SymLinkSetting;
+use rfind::main::params::Params;
+use rfind::main::searcher::Searcher;
+use rfind::main::test::Test;
+use rfind::main::debugopts::DebugOpts;
+//use rfind::main::logger::logger::StandardLogger;
+//use rfind::main::logger::logger::StandardLogger;
+//use rfind::main::logger::logger::StandardLogger;
+//use rfind::main::logger::logger::StandardLogger;
 
 fn main() {
     let logger = StandardLogger::new();
@@ -101,7 +112,7 @@ fn main() {
     }
 
     if matches.get_flag("symlink_never") {
-        symlink_setting = SymLinkSetting::Never;
+        symlink_setting = symlinksetting::SymLinkSetting::Never;
     }
 
     let debug_opts: Option<DebugOpts> = match matches.remove_one::<String>("debug_opts") {
@@ -248,6 +259,9 @@ use tempfile::NamedTempFile;
 mod tests {
     use super::*;
     use self::test_case;
+
+    use rfind::main::testlogger::TestLogger;
+    use rfind::main::filedescriptor::FileDescriptor;
 
     #[test]
     fn find_file_in_same_directory() -> Result<(), Box<dyn std::error::Error>> {
