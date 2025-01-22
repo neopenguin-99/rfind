@@ -106,12 +106,13 @@ pub mod searcher {
                     (file_type.is_socket() && provided_file_type.contains('s')) => true,
                     _ => false,
                 };
-                if line_to_log && (self.min_depth.is_some() && current_depth >= self.min_depth.unwrap()) || self.min_depth.is_none() {
-                    self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
-                    continue;
+                if line_to_log {
+                    if (self.min_depth.is_some() && current_depth > self.min_depth.unwrap()) || self.min_depth.is_none() {
+                        self.logger.lock().unwrap().log(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
+                        continue;
+                    }
                 }
-
-                if file_type.is_dir() && (self.max_depth.is_some() && current_depth < self.max_depth.unwrap() || self.max_depth.is_none()) {
+                if file_type.is_dir() && ((self.max_depth.is_some() && current_depth < self.max_depth.unwrap()) || self.max_depth.is_none()) {
                     let file_name = ele.file_name();
                     let file_name: &str = file_name.to_str().unwrap();
                     let directory_path = directory_path.join(file_name);
