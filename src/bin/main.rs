@@ -501,46 +501,6 @@ mod tests {
     }
 
     #[test]
-    fn does_not_follow_symbolic_links_by_default_2() -> Result<(), Box<dyn std::error::Error>> {
-        const FILE_NAME_WITH_EXTENSION: &'static str = "does_not_follow_symbolic_links_by_default.txt";
-        let temp = assert_fs::TempDir::new()?;
-        std::env::set_current_dir(temp.path());
-
-        let directory_of_link = temp.child("link");
-        let directory_of_original_file = temp.child("file");
-
-        std::os::unix::fs::symlink(&directory_of_original_file, directory_of_link)?;
-
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
-
-        let params = Params {
-            symlink_setting: SymLinkSetting::Never,
-            debug_opts: None,
-            optimisation_level: None
-        };
-
-        let searcher = Searcher::new(params, None, None, logger.clone(), std::env::current_dir().unwrap().to_str().unwrap().to_string()); 
-        let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
-
-        // Act
-        searcher.search_directory_path(temp.path(), &test_by_name, None, None);
-
-        // Assert
-        let logs = logger.lock().unwrap();
-        let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
-        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
-            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
-
-        // Teardown
-        directory_of_original_file.close()?;
-        directory_of_link.close()?;
-        let _ = std::env::set_current_dir(working_directory_before_test)?;
-        drop(original_file);
-
-        Ok(())
-    }
-
-    #[test]
     fn does_not_follow_symbolic_links_by_default() -> Result<(), Box<dyn std::error::Error>> {
         // Arrange 
         const FILE_NAME_WITH_EXTENSION: &'static str = "does_not_follow_symbolic_links_by_default.txt";
@@ -572,8 +532,8 @@ mod tests {
         // Assert
         let logs = logger.lock().unwrap();
         let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
-        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()),
-            "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", FILE_NAME_WITH_EXTENSION, stdout_logs));
+        // return the name of the orginal file and not the symlink.
+        assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), FILE_NAME_WITH_EXTENSION.to_string()));
 
         // Teardown
         current_directory.close()?;

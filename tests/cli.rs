@@ -33,7 +33,7 @@ mod tests {
         println!("TEST SETUP: input_file_path: {:#?}", input_file.path());
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         let val = format!("{}", temp.to_str().unwrap());
         println!("{:#?}", val);
         cmd.arg(format!("{}", temp.to_str().unwrap())).arg("--").arg("--type").arg("f");
@@ -56,7 +56,7 @@ mod tests {
         let file_path = file.path().to_str().unwrap().to_string();
         
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--type").arg("f");
 
         // Assert
@@ -77,7 +77,7 @@ mod tests {
         let directory_path = directory.path().to_str().unwrap();
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--type").arg("d");
 
         // Assert
@@ -107,7 +107,7 @@ mod tests {
         std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg("-P").arg(STARTING_PATH_STR).arg("--").arg("--type").arg("s");
 
         // Assert
@@ -140,7 +140,7 @@ mod tests {
         std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg("-L").arg(STARTING_PATH_STR).arg("--").arg("--type").arg("s");
 
         // Assert
@@ -165,7 +165,7 @@ mod tests {
         let file_path = file.path().to_str().unwrap().to_string();
         
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--type").arg("bcf");
 
         // Assert
@@ -188,7 +188,7 @@ mod tests {
         let file_name = file.path().file_name().unwrap().to_str().unwrap();
         
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--name").arg(file_name);
 
         // Assert
@@ -216,7 +216,7 @@ mod tests {
         let file = File::create(file_path.clone())?;
         
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--name").arg(FILE_NAME);
 
         // Assert
@@ -241,7 +241,7 @@ mod tests {
         let tmp_file = File::create(file_path.clone())?;
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg(STARTING_PATH_STR).arg("--").arg("--name").arg(file_path.clone()).arg("--maxdepth").arg("0");
 
         // Assert
@@ -268,7 +268,7 @@ mod tests {
         std::os::unix::fs::symlink(&original_file_path, directory_of_link_path.clone())?;
 
         // Act
-        let mut cmd = Command::cargo_bin("rfind")?;
+        let mut cmd = Command::cargo_bin("main")?;
         cmd.arg("-L").arg(STARTING_PATH_STR).arg("--").arg("--name").arg("symlink");
 
         // Assert

@@ -15,7 +15,20 @@ pub mod testlogger {
             }
         }
 
-        fn get_logs(&self) -> Vec<&Line> {
+        pub fn print(&self) {
+            let logs = &self.logs;
+            let logs_iter = logs.into_iter();
+            for log in logs_iter {
+                let b = log.message.clone();
+                match b {
+                    self::message::Message::Standard(msg) => println!("print: {}", msg),
+                    _ => continue
+                }
+            }
+
+        }
+
+        pub fn get_logs(&self) -> Vec<&Line> {
             let logs = &self.logs;
             let logs_iter = logs.into_iter();
             logs_iter.filter(|_| {
