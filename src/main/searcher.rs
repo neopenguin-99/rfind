@@ -1,4 +1,3 @@
-
 pub use self::searcher::Searcher;
 pub mod searcher {
     use std::io::ErrorKind;
@@ -9,6 +8,8 @@ pub mod searcher {
     use std::sync::Mutex;
     use std::path::Path;
     use regex::Regex;
+    use std::thread;
+    use std::sync::mpsc::channel;
 
     use crate::main::symlinksetting::SymLinkSetting;
     use crate::main::test::Test;
@@ -18,6 +19,7 @@ pub mod searcher {
     use crate::main::message::Message;
     use crate::main::line::Line;
     use crate::main::debugopts::DebugOpts;
+    use crate::main::threadpool::ThreadPool;
     #[derive(Debug)]
     pub struct Searcher<T: Logger> {
         min_depth: Option<u32>,
@@ -39,6 +41,7 @@ pub mod searcher {
         }
 
         pub fn search_directory_path(&self, directory_path: &Path, test: &Test, preceding_str: Option<String>, current_depth: Option<u32>) {
+            let pool = ThreadPool::new(4);
             let current_depth = current_depth.unwrap_or(0);
             let read_dir = match fs::read_dir(directory_path) {
                 Ok(res) => {
@@ -130,7 +133,9 @@ pub mod searcher {
                         Some(_) => preceding_str_2 = format!("{}| ", preceding_str),
                         None => preceding_str_2 = format!("{}  ", preceding_str)
                     }
-                    self.search_directory_path(directory_path, test, Some(preceding_str_2), Some(current_depth + 1));
+                    pool.execute(|| {
+                        self.search_directory_path(directory_path, test, Some(preceding_str_2), Some(current_depth + 1));
+                    });
                 }
             }
         }

@@ -18,7 +18,6 @@ use test_case::test_case;
 use assert_fs::prelude::*;
 use colored::Colorize;
 use predicates::prelude::*;
-use std::thread;
 use std::time::Duration;
 
 use rfind::main::*;

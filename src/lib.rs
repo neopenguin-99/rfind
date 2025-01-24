@@ -34,4 +34,5 @@ pub mod main {
     pub mod debugopts;
     pub mod message;
     pub mod searcher;
+    pub mod threadpool;
 }
