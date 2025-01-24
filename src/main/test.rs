@@ -4,6 +4,7 @@ pub mod test {
     #[derive(Debug)]
     pub enum Test {
         Name(String),
-        Types(String)
+        Types(String),
+        Regex(String)
     }
 }

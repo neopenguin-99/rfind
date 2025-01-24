@@ -10,6 +10,7 @@ libc = "0.2.169"
 colored = "3.0.0"
 
 # todo figure out why I get errors in editor when these are in dev-dependencies instead of dependencies
+regex = "1.11.1"
 tempfile = "3.14.0"
 mockall = "0.13.1"
 ctor = "0.2.9"

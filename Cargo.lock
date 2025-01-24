@@ -563,6 +563,7 @@ dependencies = [
  "mockall",
  "peg",
  "predicates",
+ "regex",
  "speculoos",
  "tempfile",
  "test-case",

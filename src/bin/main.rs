@@ -84,6 +84,10 @@ fn main() {
             .long("type")
             .help("The file type of the file to find")
         )
+        .arg(Arg::new("regex")
+            .long("regex")
+            .help("a regular expression to evaluate against. Will evaluate against the absolute path.")
+        )
         .allow_missing_positional(true)
         .arg(Arg::new("starting_path")
             .default_value(".")
@@ -235,6 +239,14 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), r#type.clone()]));
             let test = Test::Types(r#type);
+            searcher.search_directory_path(directory_path, &test, None, None);
+            expression_result = some_test_returns_true(*ex.expression_str.unwrap());
+        }
+        else if el == "--regex" {
+            let regex: String = tokens.get(i + 1).expect("--regex expects a regular expression, but found nothing").clone();
+
+            ex.expression_str = Some(Box::new(vec![el.to_string(), regex.clone()]));
+            let test = Test::Regex(regex);
             searcher.search_directory_path(directory_path, &test, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
@@ -767,6 +779,31 @@ mod tests {
         let tokens = [operator, operand.to_owned()].to_vec();
 
         assert_eq!(eval(tokens, searcher), expected);
+        Ok(())
+    }
+
+    #[test]
+    fn regular_expression_works() -> Result<(), Box<dyn std::error::Error>> {
+        let temp = assert_fs::TempDir::new()?;
+        std::env::set_current_dir(temp.path())?;
+
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+        
+        let params = Params {
+            symlink_setting: SymLinkSetting::Never,
+            debug_opts: None,
+            optimisation_level: None
+        };
+
+        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+
+        let file = NamedTempFile::new()?;
+        let file_name_with_extension = file.path().file_name().unwrap().to_str().unwrap().to_string();
+        
+        let tokens = [format!("--regex"), format!("*{}", file_name_with_extension)].to_vec();
+
+        assert!(eval(tokens, searcher));
+
         Ok(())
     }
 }

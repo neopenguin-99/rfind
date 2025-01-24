@@ -8,6 +8,7 @@ pub mod searcher {
     use std::os::unix::fs::FileTypeExt;
     use std::sync::Mutex;
     use std::path::Path;
+    use regex::Regex;
 
     use crate::main::symlinksetting::SymLinkSetting;
     use crate::main::test::Test;
@@ -104,6 +105,12 @@ pub mod searcher {
                     (file_type.is_fifo() && provided_file_type.contains('p')) &&
                     (file_type.is_symlink() && provided_file_type.contains('l') && self.params.symlink_setting != SymLinkSetting::Follow) &&
                     (file_type.is_socket() && provided_file_type.contains('s')) => true,
+                    Test::Regex(regex) => {
+                        let re = Regex::new(&format!(r"{}", regex).to_string()).unwrap();
+
+                        re.captures(file_name.to_str().unwrap()).unwrap();
+                        true
+                    } 
                     _ => false,
                 };
                 if line_to_log {
