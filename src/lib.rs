@@ -35,4 +35,7 @@ pub mod main {
     pub mod message;
     pub mod searcher;
     pub mod threadpool;
+    pub mod worker;
+    pub mod job;
+    pub mod fnbox;
 }

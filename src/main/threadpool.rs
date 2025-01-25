@@ -1,23 +1,42 @@
 pub use self::threadpool::ThreadPool;
 pub mod threadpool {
     use std::thread;
+    use std::sync::mpsc;
+    use crate::main::worker::Worker;
+    use crate::main::job::Job;
+    use std::sync::{Arc, Mutex};
 
     pub struct ThreadPool {
-        threads: Vec<thread::JoinHandle<()>>
+        workers: Vec<Worker>,
+        sender: mpsc::Sender<Job>,
     }
 
     impl ThreadPool {
-        fn new(size: usize) -> ThreadPool {
+        pub fn new(size: usize) -> ThreadPool {
             assert!(size > 0);
 
-            let mut threads = Vec::with_capacity(size);
+            let (sender, receiver) = mpsc::channel();
 
-            for _ in 0..size {
+            let receiver = Arc::new(Mutex::new(receiver));
 
+            let mut workers = Vec::with_capacity(size);
+
+            for id in 0..size {
+                workers.push(Worker::new(id, Arc::clone(&receiver)));
             }
             ThreadPool {
-                threads
+                workers,
+                sender,
             }
         }
+        pub fn execute<F>(&self, f: F) 
+            where
+                F: FnOnce() + Send + 'static
+        {
+            let job = Box::new(f);
+
+            self.sender.send(job).unwrap()
+        }
     }
+
 }
