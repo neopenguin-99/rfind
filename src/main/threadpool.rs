@@ -1,6 +1,5 @@
 pub use self::threadpool::ThreadPool;
 pub mod threadpool {
-    use std::thread;
     use std::sync::mpsc;
     use crate::main::worker::Worker;
     use crate::main::job::Job;
@@ -29,7 +28,7 @@ pub mod threadpool {
                 sender,
             }
         }
-        pub fn execute<F>(&self, f: F) 
+        pub fn execute<F>(&self, f: F)
             where
                 F: FnOnce() + Send + 'static
         {
@@ -38,5 +37,4 @@ pub mod threadpool {
             self.sender.send(job).unwrap()
         }
     }
-
 }
