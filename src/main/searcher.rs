@@ -21,48 +21,54 @@ pub mod searcher {
     use crate::main::message::Message;
     use crate::main::line::Line;
     use crate::main::debugopts::DebugOpts;
-    use crate::main::threadpool::ThreadPool;
+    use crate::main::threadpool::{self, ThreadPool};
+
     #[derive(Debug)]
     pub struct Searcher {
         min_depth: Option<u32>,
         max_depth: Option<u32>,
+        threadpool: Box<Option<Arc<Mutex<ThreadPool>>>>,
         params: Params,
         pub starting_path: String
     }
 
     impl Searcher {
-        pub fn new(params: Params, max_depth: Option<u32>, min_depth: Option<u32>, starting_path: String) -> Searcher {
+        pub fn new(params: Params, max_depth: Option<u32>, min_depth: Option<u32>, starting_path: String, threadpool: Box<Option<Arc<Mutex<ThreadPool>>>>) -> Searcher {
             Searcher {
                 params,
                 max_depth,
                 min_depth,
-                starting_path
+                starting_path,
+                threadpool
             }
         }
 
-        pub fn search_directory_path(&self, directory_path: &Path, test: &Test, preceding_str: Option<String>, current_depth: Option<u32>, pool: Option<ThreadPool>) -> Rc<Vec<Line>> { 
+        pub fn search_directory_path(self: Arc<Self>, directory_path: &Path, test: Test, preceding_str: Option<String>, current_depth: Option<u32>) -> Vec<Line> { 
+            let min_depth = self.min_depth;
+            let max_depth = self.max_depth;
+            let params = self.params.clone();
             let current_depth = current_depth.unwrap_or(0);
-            let mut logs: Rc<Vec<Line>> = Rc::new(Vec::new());
+            let mut lines: Vec<Line> = Vec::new();
             let read_dir = match fs::read_dir(directory_path) {
                 Ok(res) => {
                     res
                 }
                 Err(error) if error.kind() == ErrorKind::PermissionDenied => {
                     let line = format!("rfind: Permission denied for directory name {}", directory_path.to_str().unwrap());
-                    logs.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
-                    return logs;
+                    lines.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
+                    return lines;
                 }
                 Err(_) => {
                     let line = format!("rfind: An error occurred when attempting to read the {} directory", directory_path.to_str().unwrap());
-                    logs.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
-                    return logs;
+                    lines.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
+                    return lines;
                 }
             };
             let mut read_dir_iter = read_dir.peekable();
             while let Some(ele) = read_dir_iter.next() {
                 let mut preceding_str = preceding_str.clone().unwrap_or(String::new()).clone();
-                if self.params.debug_opts.is_some() {
-                    let debug_opts = self.params.debug_opts.as_ref().unwrap();
+                if params.debug_opts.is_some() {
+                    let debug_opts = params.debug_opts.as_ref().unwrap();
                     if read_dir_iter.peek().is_some() && *debug_opts == DebugOpts::Tree {
                         preceding_str.push_str("├── ")
                     }
@@ -74,18 +80,19 @@ pub mod searcher {
                 let file_name = ele.file_name();
                 let file_type = ele.file_type().unwrap();
 
-                if file_type.is_symlink() && self.params.symlink_setting == crate::main::symlinksetting::SymLinkSetting::Follow {
+                let mut lines = lines.clone();
+                if file_type.is_symlink() && params.symlink_setting == crate::main::symlinksetting::SymLinkSetting::Follow {
                     // navigate to the file pointed to by the symlink
                     let file_referred_to_by_symlink = fs::read_link(ele.path());
                     _ = match file_referred_to_by_symlink {
                         Ok(file_referred_to_by_symlink_unwrapped) => {
                             let line = format!("{}{}", preceding_str, file_referred_to_by_symlink_unwrapped.to_str().unwrap());
-                            logs.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdOut));
+                            lines.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdOut));
                             continue;
                         }
                         Err(error) if error.kind() == ErrorKind::NotFound && read_dir_iter.peek().is_some() => {
                             let line = format!("{}Broken symlink: {}", preceding_str, ele.path().to_str().unwrap());
-                            logs.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
+                            lines.push(Line::new_with_fd(Message::Standard(line), FileDescriptor::StdErr));
                             continue;
                         }
                         Err(_) => {
@@ -98,17 +105,18 @@ pub mod searcher {
                 // todo
                 // self.logger.lock().unwrap().log(LogLine::StdOut(directory_path.join(file_name.clone()).to_str().unwrap().to_string()));
                 let line_to_log;
+                let test = test.clone();
                 line_to_log = match test {
-                    Test::Name(name) if file_name.to_str().unwrap() == name => true,
-                    Test::Types(provided_file_type) if 
+                    Test::Name(ref name) if file_name.to_str().unwrap() == name => true,
+                    Test::Types(ref provided_file_type) if 
                     (file_type.is_block_device() && provided_file_type.contains('b')) &&
                     (file_type.is_char_device() && provided_file_type.contains('c')) &&
                     (file_type.is_dir() && provided_file_type.contains('d')) &&
                     (file_type.is_file() && provided_file_type.contains('f')) &&
                     (file_type.is_fifo() && provided_file_type.contains('p')) &&
-                    (file_type.is_symlink() && provided_file_type.contains('l') && self.params.symlink_setting != SymLinkSetting::Follow) &&
+                    (file_type.is_symlink() && provided_file_type.contains('l') && params.symlink_setting != SymLinkSetting::Follow) &&
                     (file_type.is_socket() && provided_file_type.contains('s')) => true,
-                    Test::Regex(regex) => {
+                    Test::Regex(ref regex) => {
                         let re = Regex::new(&format!(r"{}", regex).to_string()).unwrap();
 
                         re.captures(file_name.to_str().unwrap()).unwrap();
@@ -117,35 +125,36 @@ pub mod searcher {
                     _ => false,
                 };
                 if line_to_log {
-                    if (self.min_depth.is_some() && current_depth > self.min_depth.unwrap()) || self.min_depth.is_none() {
-                        logs.push(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
+                    if (min_depth.is_some() && current_depth > min_depth.unwrap()) || min_depth.is_none() {
+                        lines.push(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
                         continue;
                     }
                 }
-                if file_type.is_dir() && ((self.max_depth.is_some() && current_depth < self.max_depth.unwrap()) || self.max_depth.is_none()) {
+                if file_type.is_dir() && ((max_depth.is_some() && current_depth < max_depth.unwrap()) || max_depth.is_none()) {
                     let file_name = ele.file_name();
                     let file_name: &str = file_name.to_str().unwrap();
                     let directory_path = directory_path.join(file_name);
-                    let directory_path = directory_path.as_path();
 
                     let preceding_str_2: String;
                     match read_dir_iter.peek() {
                         Some(_) => preceding_str_2 = format!("{}| ", preceding_str),
                         None => preceding_str_2 = format!("{}  ", preceding_str)
                     }
-                    if pool.is_some() {
-                        pool.unwrap().execute(|| {
-                            let a = *self.search_directory_path(directory_path, test, Some(preceding_str_2), Some(current_depth + 1), pool)
-                            // logs.extend(*self.search_directory_path(directory_path, test, Some(preceding_str_2), Some(current_depth + 1), pool));
-                            
-                        });
-                    }
-                    else {
-                        self.search_directory_path(directory_path, test, Some(preceding_str_2), Some(current_depth + 1), pool);
-                    }
+                    type SearcherFn = fn(Arc<Searcher>, &Path, Test, Option<String>, Option<u32>) -> Vec<Line>;
+                    let searcher_fn: SearcherFn = Searcher::search_directory_path;
+                    let self_ref = Arc::clone(&self);
+
+                    self_ref.threadpool.clone().unwrap().lock().unwrap().execute(move || {
+                        let res = searcher_fn(self_ref, directory_path.as_path(), test, Some(preceding_str_2), Some(current_depth + 1));
+                        for line in res {
+                            lines.push(line);
+                        }
+                    });
+
+                    // self.search_directory_path(&directory_path, test, Some(preceding_str_2), Some(current_depth + 1));
                 }
             }
-            return logs;
+            return lines;
         }
     }
 }

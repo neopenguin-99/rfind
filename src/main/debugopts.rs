@@ -1,7 +1,7 @@
 pub use self::debugopts::DebugOpts;
 pub mod debugopts {
     use crate::main::*;
-    #[derive(Debug, PartialEq)]
+    #[derive(Clone, Copy, Debug, PartialEq)]
     pub enum DebugOpts {
         Exec,
         Opt,

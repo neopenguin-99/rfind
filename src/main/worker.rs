@@ -2,28 +2,36 @@ pub use self::worker::Worker;
 pub mod worker {
     use std::sync::mpsc;
     use std::thread;
-    use crate::main::job::Job;
+    use crate::main::multithreadmessage::MultiThreadMessage;
     use std::sync::{Arc, Mutex};
+    #[derive(Debug)]
     pub struct Worker {
-        id: usize,
-        thread: thread::JoinHandle<()>,
+        pub id: usize,
+        pub thread: Option<thread::JoinHandle<()>>
     }
 
     impl Worker {
-        pub fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<Job>>>) -> Worker {
+        pub fn new(id: usize, receiver: Arc<Mutex<mpsc::Receiver<MultiThreadMessage>>>) -> Worker {
             let thread = thread::spawn(move || {
                 loop {
-                    let job = receiver.lock().unwrap().recv().unwrap();
+                    let message = receiver.lock().unwrap().recv().unwrap();
 
-                    println!("Worker {} got a job; executing.", id);
-
-                    job.call_box();
+                    match message {
+                        MultiThreadMessage::NewJob(job) => {
+                            println!("Worker {} got a job; executing.", id);
+                            job.call_box();
+                        },
+                        MultiThreadMessage::Terminate => {
+                            println!("Worker {} was told to terminate", id);
+                            break;
+                        }
+                    }
                 }
             });
 
             Worker {
                 id,
-                thread,
+                thread: Some(thread)
             }
         }
     }
