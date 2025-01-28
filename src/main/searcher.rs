@@ -27,13 +27,13 @@ pub mod searcher {
     pub struct Searcher {
         min_depth: Option<u32>,
         max_depth: Option<u32>,
-        threadpool: Box<Option<Arc<Mutex<ThreadPool>>>>,
+        threadpool: Option<Arc<Mutex<ThreadPool>>>,
         params: Params,
         pub starting_path: String
     }
 
     impl Searcher {
-        pub fn new(params: Params, max_depth: Option<u32>, min_depth: Option<u32>, starting_path: String, threadpool: Box<Option<Arc<Mutex<ThreadPool>>>>) -> Searcher {
+        pub fn new(params: Params, max_depth: Option<u32>, min_depth: Option<u32>, starting_path: String, threadpool: Option<Arc<Mutex<ThreadPool>>>) -> Searcher {
             Searcher {
                 params,
                 max_depth,
@@ -80,7 +80,6 @@ pub mod searcher {
                 let file_name = ele.file_name();
                 let file_type = ele.file_type().unwrap();
 
-                let mut lines = lines.clone();
                 if file_type.is_symlink() && params.symlink_setting == crate::main::symlinksetting::SymLinkSetting::Follow {
                     // navigate to the file pointed to by the symlink
                     let file_referred_to_by_symlink = fs::read_link(ele.path());
@@ -144,14 +143,24 @@ pub mod searcher {
                     let searcher_fn: SearcherFn = Searcher::search_directory_path;
                     let self_ref = Arc::clone(&self);
 
-                    self_ref.threadpool.clone().unwrap().lock().unwrap().execute(move || {
-                        let res = searcher_fn(self_ref, directory_path.as_path(), test, Some(preceding_str_2), Some(current_depth + 1));
+                    // if arc.clone works the way i think it does, then the reference count is
+                    // incremented by 1, instead of performing a deep copy.
+                    if self_ref.threadpool.is_some() {
+                        self_ref.threadpool.clone().unwrap().lock().unwrap().execute(move || {
+                            let res = searcher_fn(self_ref, directory_path.as_path(), test, Some(preceding_str_2), Some(current_depth + 1));
+                            // for line in res {
+                                // lines.push(line);
+                            // }
+                        });
+                    }
+                    else {
+                        let res = self_ref.search_directory_path(&directory_path, test, Some(preceding_str_2), Some(current_depth + 1));
                         for line in res {
                             lines.push(line);
                         }
-                    });
 
-                    // self.search_directory_path(&directory_path, test, Some(preceding_str_2), Some(current_depth + 1));
+                    }
+
                 }
             }
             return lines;

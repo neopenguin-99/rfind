@@ -11,7 +11,7 @@ use std::process::exit;
 use std::env;
 use clap::{arg, crate_authors, crate_version, value_parser, Arg, ArgAction, ArgMatches, Command, ValueEnum};
 use libc::write;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::fs::File;
 use speculoos::prelude::*;
 use test_case::test_case;
@@ -28,6 +28,7 @@ use rfind::main::params::Params;
 use rfind::main::searcher::Searcher;
 use rfind::main::test::Test;
 use rfind::main::debugopts::DebugOpts;
+use rfind::main::threadpool::ThreadPool;
 
 fn main() {
     let logger = StandardLogger::new();
@@ -151,9 +152,10 @@ fn main() {
         _ => vec!["--true".to_string()]
     };
     
-    let searcher = Searcher::<StandardLogger>::new(params, max_depth, min_depth, Rc::new(Mutex::new(logger)), starting_path.unwrap_or(format!(".")));
+    let threadpool = ThreadPool::new(4);
+    let searcher = Searcher::new(params, max_depth, min_depth, starting_path.unwrap_or(format!(".")), Some(Arc::new(Mutex::new(threadpool))));
     println!("{:#?}", searcher);
-    eval(expression, searcher);
+    eval(expression, Arc::new(searcher));
 }
 
 
@@ -172,7 +174,7 @@ fn some_test_returns_false(input: Vec<String>) -> bool {
     false
 }
 
-fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
+fn eval(tokens: Vec<String>, searcher: Arc<Searcher>) -> bool {
     println!("TOKENS: {:#?}", tokens);
 
     let iter = tokens.iter();
@@ -199,7 +201,8 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
     }
 
     let mut expression_result: bool = false;
-    let directory_path = Path::new(&searcher.starting_path);
+    let searcher_clone = Arc::clone(&searcher);
+    let directory_path = Path::new(&searcher_clone.starting_path);
     for (i, el) in iter.enumerate() {
         if el == "--true" {
             expression_result = true;
@@ -230,7 +233,7 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), name.clone()]));
             let test = Test::Name(name.clone());
-            searcher.search_directory_path(directory_path, &test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         else if el == "--type" {
@@ -238,7 +241,7 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), r#type.clone()]));
             let test = Test::Types(r#type);
-            searcher.search_directory_path(directory_path, &test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         else if el == "--regex" {
@@ -246,7 +249,7 @@ fn eval<T: Logger>(tokens: Vec<String>, searcher: Searcher<T>) -> bool {
 
             ex.expression_str = Some(Box::new(vec![el.to_string(), regex.clone()]));
             let test = Test::Regex(regex);
-            searcher.search_directory_path(directory_path, &test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
     }
@@ -280,16 +283,20 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
 
         // Create a file inside of `env::temp_dir()`.
         let file = NamedTempFile::new()?;
         let file_name_with_extension = file.path().file_name().unwrap().to_str().unwrap().to_string();
         let test_by_name = Test::Name(file_name_with_extension.clone());
 
-        // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
-        
+        // Actlogger.clone(), 
+        //logger.clone(), 
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
+
         // Assert  
         let logs = logger.lock().unwrap();
         let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
@@ -312,7 +319,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
         
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -323,7 +330,10 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -347,7 +357,6 @@ mod tests {
         let temp_dir = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp_dir.path())?;
 
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
 
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
@@ -355,12 +364,17 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), temp_dir.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, temp_dir.path().to_str().unwrap().to_string(), None);
         let temp_file = temp_dir.child(CHILD_FILE_REL_PATH).touch();
 
         let test_by_name = Test::Name(CHILD_FILE.to_string());
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        let logger = Rc::new(Mutex::new(TestLogger::new()));
+        for line in lines {
+            println!("line: {:#?}", line);
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -386,7 +400,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
 
         let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
@@ -395,7 +409,10 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -421,7 +438,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, Some(0), None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, Some(0), None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
 
         // Create a directory inside of `env::temp_dir()`
         let directory = TempDir::new()?;
@@ -431,7 +448,10 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -456,7 +476,7 @@ mod tests {
             optimisation_level: None
         };
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        let searcher = Searcher::new(params, Some(1), None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, Some(1), None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
 
         let directory = Builder::new().prefix(FILE_NAME).tempdir().unwrap();
         let temp_dir_child = Builder::new().prefix(FILE_NAME).tempdir_in(directory.path()).unwrap();
@@ -465,7 +485,10 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -495,12 +518,16 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, Some(1), logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, Some(1), temp.path().to_str().unwrap().to_string(), None);
         temp.child(FILE_NAME_WITH_EXTENSION).touch()?;
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        searcher.search_directory_path(tempfile::env::temp_dir().as_path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
+
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -534,11 +561,15 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string()); 
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None); 
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        searcher.search_directory_path(current_directory.path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(current_directory.path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
+
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -577,11 +608,14 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -623,11 +657,14 @@ mod tests {
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        searcher.search_directory_path(directory_of_link.path(), &test_by_name, None, None);
+        let lines = Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
 
         // Assert
         let logs = logger.lock().unwrap();
@@ -662,11 +699,15 @@ mod tests {
         };
 
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), tempfile::env::temp_dir().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, tempfile::env::temp_dir().to_str().unwrap().to_string(), None);
         let test = Test::Name("foo4.txt".to_string());
 
         // Act
-        searcher.search_directory_path(temp.path(), &test, None, None);
+        let lines = Arc::new(searcher).search_directory_path(temp.path(), test, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
+
 
         // Assert
         // let stdout_logs = logger.lock().unwrap().get_logs_by_type(discriminant(&LogLine::StdOut(String::new())));
@@ -705,8 +746,11 @@ mod tests {
         // todo add more
         let test = Test::Name("empty_file.txt".to_string());
         
-        let searcher = Searcher::new(params, None, None, logger.clone(), std::env::current_dir().unwrap().to_str().unwrap().to_string());
-        searcher.search_directory_path(temp.path(), &test, None, None);
+        let searcher = Searcher::new(params, None, None, std::env::current_dir().unwrap().to_str().unwrap().to_string(), None);
+        let lines = Arc::new(searcher).search_directory_path(temp.path(), test, None, None);
+        for line in lines {
+            logger.lock().unwrap().log(line); 
+        }
         
         Ok(())
     }
@@ -719,19 +763,17 @@ mod tests {
         let temp = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp.path())?;
 
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
-
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, temp.path().to_str().unwrap().to_string(), None);
 
         let operator = format!("--and");
         let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
 
-        assert_eq!(eval(tokens, searcher), expected);
+        assert_eq!(eval(tokens, Arc::new(searcher)), expected);
         Ok(())
     }
 
@@ -743,19 +785,17 @@ mod tests {
         let temp = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp.path())?;
 
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
-
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, temp.path().to_str().unwrap().to_string(), None);
 
         let operator = format!("--or");
         let tokens = [ first_operand.to_owned(), operator, second_operand.to_owned() ].to_vec();
 
-        assert_eq!(eval(tokens, searcher), expected);
+        assert_eq!(eval(tokens, Arc::new(searcher)), expected);
         Ok(())
     }
 
@@ -765,19 +805,17 @@ mod tests {
         let temp = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp.path())?;
 
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
-        
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
             debug_opts: None,
             optimisation_level: None
         };
-        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, temp.path().to_str().unwrap().to_string(), None);
 
         let operator = format!("--not");
         let tokens = [operator, operand.to_owned()].to_vec();
 
-        assert_eq!(eval(tokens, searcher), expected);
+        assert_eq!(eval(tokens, Arc::new(searcher)), expected);
         Ok(())
     }
 
@@ -786,22 +824,20 @@ mod tests {
         let temp = assert_fs::TempDir::new()?;
         std::env::set_current_dir(temp.path())?;
 
-        let logger = Rc::new(Mutex::new(TestLogger::new()));
-        
         let params = Params {
             symlink_setting: SymLinkSetting::Never,
             debug_opts: None,
             optimisation_level: None
         };
 
-        let searcher = Searcher::new(params, None, None, logger.clone(), temp.path().to_str().unwrap().to_string());
+        let searcher = Searcher::new(params, None, None, temp.path().to_str().unwrap().to_string(), None);
 
         let file = NamedTempFile::new()?;
         let file_name_with_extension = file.path().file_name().unwrap().to_str().unwrap().to_string();
         
         let tokens = [format!("--regex"), format!("*{}", file_name_with_extension)].to_vec();
 
-        assert!(eval(tokens, searcher));
+        assert!(eval(tokens, Arc::new(searcher)));
 
         Ok(())
     }
