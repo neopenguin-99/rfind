@@ -3,6 +3,7 @@ pub use self::searcher::Searcher;
 pub mod searcher {
     use std::io::ErrorKind;
     use std::fs::{self, FileType, ReadDir};
+    use std::ops::Deref;
     use std::{borrow::BorrowMut, cell::RefCell, fmt::Debug, ptr, rc::Rc, cell::Ref};
     use std::os::fd::{AsRawFd, FromRawFd};
     use std::os::unix::fs::FileTypeExt;
@@ -43,7 +44,7 @@ pub mod searcher {
             }
         }
 
-        pub fn search_directory_path(self: Arc<Self>, directory_path: &Path, test: Test, preceding_str: Option<String>, current_depth: Option<u32>, mut lines: Box<Vec<Line>>) { 
+        pub fn search_directory_path(self: Arc<Self>, directory_path: &Path, test: Test, preceding_str: Option<String>, current_depth: Option<u32>, mut lines: Arc<Vec<Line>>) { 
             let min_depth = self.min_depth;
             let max_depth = self.max_depth;
             let params = self.params.clone();
@@ -64,7 +65,7 @@ pub mod searcher {
                 }
             };
             let mut read_dir_iter = read_dir.peekable();
-            let arc_ref = Box::new(lines.clone());
+            let rc_ref = Arc::clone(&lines);
             while let Some(ele) = read_dir_iter.next() {
                 let mut preceding_str = preceding_str.clone().unwrap_or(String::new()).clone();
                 if params.debug_opts.is_some() {
@@ -125,6 +126,8 @@ pub mod searcher {
                 };
                 if line_to_log {
                     if (min_depth.is_some() && current_depth > min_depth.unwrap()) || min_depth.is_none() {
+                        let mut b = lines.deref();
+                        b.push(Line::new_with_fd(Message::Standard(directory_path.join(&file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
                         lines.push(Line::new_with_fd(Message::Standard(directory_path.join(file_name).to_str().unwrap().to_string()), FileDescriptor::StdOut));
                         continue;
                     }
@@ -139,21 +142,21 @@ pub mod searcher {
                         Some(_) => preceding_str_2 = format!("{}| ", preceding_str),
                         None => preceding_str_2 = format!("{}  ", preceding_str)
                     }
-                    type SearcherFn = fn(Arc<Searcher>, &Path, Test, Option<String>, Option<u32>, Box<Vec<Line>>);
+                    type SearcherFn = fn(Arc<Searcher>, &Path, Test, Option<String>, Option<u32>, Arc<Vec<Line>>);
                     let searcher_fn: SearcherFn = Searcher::search_directory_path;
 
 
                     // if arc.clone works the way i think it does, then the reference count is
                     // incremented by 1, instead of performing a deep copy.
                     let self_ref = Arc::clone(&self);
-                    let some_box = Box::clone(&arc_ref);
+                    let some_rc = Arc::clone(&rc_ref);
                     if self_ref.threadpool.is_some() {
                         self_ref.threadpool.clone().unwrap().lock().unwrap().execute(move || {
-                            searcher_fn(self_ref, directory_path.as_path(), test, Some(preceding_str_2), Some(current_depth + 1), *some_box);
+                            searcher_fn(self_ref, directory_path.as_path(), test, Some(preceding_str_2), Some(current_depth + 1), some_rc);
                         });
                     }
                     else {
-                        self_ref.search_directory_path(&directory_path, test, Some(preceding_str_2), Some(current_depth + 1), *some_box);
+                        self_ref.search_directory_path(&directory_path, test, Some(preceding_str_2), Some(current_depth + 1), some_rc);
                     }
                 }
             }

@@ -228,12 +228,13 @@ fn eval(tokens: Vec<String>, searcher: Arc<Searcher>) -> bool {
             return !eval(tokens[i+1..].to_vec(), searcher);
         }
         // tests logic
+        let lines = Box::new(Vec::new());
         if el == "--name" { // todo maybe make one if statement for all tests?
             let name: String = tokens.get(i + 1).expect("--name expects a file name, but found nothing").clone();
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), name.clone()]));
             let test = Test::Name(name.clone());
-            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None, Box::clone(&lines));
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         else if el == "--type" {
@@ -241,7 +242,7 @@ fn eval(tokens: Vec<String>, searcher: Arc<Searcher>) -> bool {
             
             ex.expression_str = Some(Box::new(vec![el.to_string(), r#type.clone()]));
             let test = Test::Types(r#type);
-            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None, Box::clone(&lines));
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
         else if el == "--regex" {
@@ -249,7 +250,7 @@ fn eval(tokens: Vec<String>, searcher: Arc<Searcher>) -> bool {
 
             ex.expression_str = Some(Box::new(vec![el.to_string(), regex.clone()]));
             let test = Test::Regex(regex);
-            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None);
+            Arc::clone(&searcher).search_directory_path(directory_path, test, None, None, Box::clone(&lines));
             expression_result = some_test_returns_true(*ex.expression_str.unwrap());
         }
     }
@@ -292,8 +293,9 @@ mod tests {
 
         // Actlogger.clone(), 
         //logger.clone(), 
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -330,8 +332,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -369,10 +372,10 @@ mod tests {
 
         let test_by_name = Test::Name(CHILD_FILE.to_string());
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
         let logger = Rc::new(Mutex::new(TestLogger::new()));
-        for line in lines {
-            println!("line: {:#?}", line);
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -380,7 +383,6 @@ mod tests {
         let logs = logger.lock().unwrap();
         let stdout_logs = logs.get_logs_by_file_descriptor(FileDescriptor::StdOut);
 
-        println!("logs: {:#?}", stdout_logs);
         assert!(TestLogger::get_lines_from_logs_where_logs_contains_provided_value(stdout_logs.clone(), CHILD_FILE.to_string()),
             "{}", format!("expected to find {} in logs, but the string could not be found. Full logs: \n{:#?}", CHILD_FILE, stdout_logs));
         // Teardown
@@ -409,8 +411,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -448,8 +451,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -485,8 +489,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -523,8 +528,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
 
         // Act
-        let lines = Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(tempfile::env::temp_dir().as_path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -565,8 +571,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        let lines = Arc::new(searcher).search_directory_path(current_directory.path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(current_directory.path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -612,8 +619,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        let lines = Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -661,8 +669,9 @@ mod tests {
         let test_by_name = Test::Name(FILE_NAME_WITH_EXTENSION.to_string());
         
         // Act
-        let lines = Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(directory_of_link.path(), test_by_name, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -703,8 +712,9 @@ mod tests {
         let test = Test::Name("foo4.txt".to_string());
 
         // Act
-        let lines = Arc::new(searcher).search_directory_path(temp.path(), test, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(temp.path(), test, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
 
@@ -747,8 +757,9 @@ mod tests {
         let test = Test::Name("empty_file.txt".to_string());
         
         let searcher = Searcher::new(params, None, None, std::env::current_dir().unwrap().to_str().unwrap().to_string(), None);
-        let lines = Arc::new(searcher).search_directory_path(temp.path(), test, None, None);
-        for line in lines {
+        let lines = Box::new(Vec::new());
+        Arc::new(searcher).search_directory_path(temp.path(), test, None, None, Box::clone(&lines));
+        for line in *lines {
             logger.lock().unwrap().log(line); 
         }
         
